@@ -12,6 +12,9 @@ INSERT INTO users (email, name, role) VALUES
     ('test.reviewer@example.com', 'Test Reviewer', 'reviewer')
 ON CONFLICT (email) DO NOTHING;
 
+-- Get admin user ID for later reference
+SELECT id INTO admin_user_id FROM users WHERE email = 'cbconnectbr@gmail.com';
+
 -- ============================================================================
 -- Test Products
 -- ============================================================================
@@ -42,50 +45,48 @@ ON CONFLICT (sku) DO NOTHING;
 -- Test Knowledge Entries
 -- ============================================================================
 
--- Get user and product IDs for references
+-- Get user IDs for references
 DO $$
 DECLARE
     admin_id UUID;
     reviewer_id UUID;
-    headphones_id UUID;
-    bottle_id UUID;
 BEGIN
     -- Get user IDs
     SELECT id INTO admin_id FROM users WHERE email = 'cbconnectbr@gmail.com';
     SELECT id INTO reviewer_id FROM users WHERE email = 'test.reviewer@example.com';
 
-    -- Get product IDs
-    SELECT id INTO headphones_id FROM products WHERE sku = 'CBC004-1234';
-    SELECT id INTO bottle_id FROM products WHERE sku = 'K004-5678';
-
-    -- Insert knowledge entries for headphones
+    -- Insert knowledge entries with new schema
     INSERT INTO knowledge_entries (
-        product_id,
+        sku,
+        title,
+        content,
+        source_type,
+        source_id,
+        source_group,
         category,
-        question,
-        answer,
-        tags,
-        source,
-        verified,
-        verified_by,
-        verified_at,
+        keywords,
+        status,
+        reviewed_by,
+        reviewed_at,
         created_by
     ) VALUES
+        -- Knowledge entries for CBC004-1234 (Wireless Bluetooth Headphones)
         (
-            headphones_id,
-            'specification',
+            'CBC004-1234',
             '这款耳机的电池续航时间是多久？',
             '这款无线蓝牙耳机在充满电的情况下可以连续播放音乐约 30 小时。如果开启降噪功能，续航时间约为 20 小时。充电时间约 2 小时。',
-            ARRAY['battery', 'playtime', 'charging', 'specification'],
-            'Product Manual v2.1',
-            TRUE,
+            'feishu_chat',
+            'msg_20260426_001',
+            'tech_group_001',
+            ARRAY['specification', 'battery'],
+            ARRAY['battery', 'playtime', 'charging'],
+            'approved',
             reviewer_id,
             NOW() - INTERVAL '2 days',
             admin_id
         ),
         (
-            headphones_id,
-            'troubleshooting',
+            'CBC004-1234',
             '耳机无法连接蓝牙怎么办？',
             '请尝试以下步骤：
 1. 确保耳机已充电并开机
@@ -93,30 +94,34 @@ BEGIN
 3. 在手机蓝牙设置中搜索设备名称 "AudioTech-BT500"
 4. 如仍无法连接，请先删除已配对记录，然后重新配对
 5. 确保耳机未同时连接其他设备（最多支持 2 台设备）',
-            ARRAY['bluetooth', 'pairing', 'connection', 'troubleshooting'],
-            'Customer Support FAQ',
-            TRUE,
+            'feishu_chat',
+            'msg_20260426_002',
+            'tech_group_001',
+            ARRAY['troubleshooting', 'connection'],
+            ARRAY['bluetooth', 'pairing', 'connection'],
+            'approved',
             reviewer_id,
             NOW() - INTERVAL '1 day',
             admin_id
         ),
         (
-            headphones_id,
-            'faq',
+            'CBC004-1234',
             '这款耳机支持有线连接吗？',
             '是的，这款耳机支持有线连接。包装内附带一根 3.5mm 音频线，即使在没电的情况下也可以通过有线方式继续使用。需要注意的是，有线模式下降噪功能仍需耳机有电才能使用。',
-            ARRAY['aux', 'wired', 'cable', 'connection'],
-            'Product Description',
-            FALSE,
+            'manual',
+            'manual_20260426_001',
+            NULL,
+            ARRAY['faq', 'connection'],
+            ARRAY['aux', 'wired', 'cable'],
+            'pending',
             NULL,
             NULL,
             admin_id
         ),
 
-        -- Insert knowledge entries for water bottle
+        -- Knowledge entries for K004-5678 (Stainless Steel Water Bottle)
         (
-            bottle_id,
-            'specification',
+            'K004-5678',
             '这款水杯的保温效果如何？',
             '这款 304 不锈钢保温杯采用双层真空设计：
 - 保温时间：热水可保持 6-8 小时在 60°C 以上
@@ -124,16 +129,18 @@ BEGIN
 - 杯口密封性好，不漏水
 - 容量：500ml
 - 适用温度范围：-20°C 至 100°C',
-            ARRAY['insulation', 'temperature', 'vacuum', 'specification'],
-            'Product Technical Sheet',
-            TRUE,
+            'feishu_chat',
+            'msg_20260426_003',
+            'tech_group_002',
+            ARRAY['specification', 'insulation'],
+            ARRAY['insulation', 'temperature', 'vacuum'],
+            'approved',
             reviewer_id,
             NOW() - INTERVAL '3 days',
             admin_id
         ),
         (
-            bottle_id,
-            'usage',
+            'K004-5678',
             '这款水杯可以放进洗碗机吗？',
             '不建议将此水杯放入洗碗机清洗。原因如下：
 1. 高温和强力清洁剂可能损坏真空层
@@ -145,9 +152,12 @@ BEGIN
 - 用软毛刷清洁杯内
 - 杯盖和密封圈可拆卸单独清洗
 - 每次使用后及时清洗，避免异味',
+            'feishu_chat',
+            'msg_20260426_004',
+            'tech_group_002',
+            ARRAY['usage', 'maintenance'],
             ARRAY['cleaning', 'dishwasher', 'maintenance', 'care'],
-            'Care Instructions',
-            TRUE,
+            'approved',
             reviewer_id,
             NOW() - INTERVAL '5 days',
             admin_id
@@ -163,15 +173,15 @@ END $$;
 DO $$
 DECLARE
     viewer_id UUID;
-    headphones_entry_id UUID;
+    bluetooth_entry_id UUID;
 BEGIN
     -- Get user and entry IDs
     SELECT id INTO viewer_id FROM users WHERE email = 'test.viewer@example.com';
-    SELECT id INTO headphones_entry_id FROM knowledge_entries WHERE question LIKE '%蓝牙%' LIMIT 1;
+    SELECT id INTO bluetooth_entry_id FROM knowledge_entries WHERE title LIKE '%蓝牙%' LIMIT 1;
 
     -- Insert search logs
     INSERT INTO search_logs (user_id, query, result_count, clicked_entry_id, search_type, created_at) VALUES
-        (viewer_id, '蓝牙连接', 3, headphones_entry_id, 'keyword', NOW() - INTERVAL '1 hour'),
+        (viewer_id, '蓝牙连接', 3, bluetooth_entry_id, 'keyword', NOW() - INTERVAL '1 hour'),
         (viewer_id, 'CBC004', 5, NULL, 'sku', NOW() - INTERVAL '2 hours'),
         (viewer_id, '保温', 2, NULL, 'keyword', NOW() - INTERVAL '3 hours'),
         (NULL, '耳机电池', 1, NULL, 'keyword', NOW() - INTERVAL '4 hours');

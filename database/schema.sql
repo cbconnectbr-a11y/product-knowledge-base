@@ -56,44 +56,53 @@ COMMENT ON COLUMN products.metadata IS 'Flexible JSON field for additional produ
 
 -- ============================================================================
 -- Table: knowledge_entries
--- Description: Knowledge base entries linked to products
+-- Description: Knowledge base entries
 -- ============================================================================
 CREATE TABLE knowledge_entries (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-    category VARCHAR(100) NOT NULL CHECK (category IN (
-        'specification',
-        'usage',
-        'troubleshooting',
-        'faq',
-        'comparison',
-        'certification',
-        'other'
-    )),
-    question TEXT NOT NULL,
-    answer TEXT NOT NULL,
-    tags TEXT[] DEFAULT '{}',
-    source VARCHAR(200),
-    verified BOOLEAN NOT NULL DEFAULT FALSE,
-    verified_by UUID REFERENCES users(id),
-    verified_at TIMESTAMPTZ,
-    search_vector tsvector,
-    created_by UUID NOT NULL REFERENCES users(id),
+    sku VARCHAR(100),
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+
+    -- Source information
+    source_type VARCHAR(50) NOT NULL,  -- 'feishu_chat', 'manual'
+    source_id VARCHAR(200),
+    source_group VARCHAR(200),
+
+    -- Classification and tags (Phase 1 manual, Phase 2+ AI)
+    category TEXT[] DEFAULT '{}',
+    keywords TEXT[] DEFAULT '{}',
+
+    -- Status management
+    status VARCHAR(50) DEFAULT 'pending',  -- 'pending', 'draft', 'approved', 'rejected'
+
+    -- Usage statistics
+    view_count INTEGER DEFAULT 0,
+    helpful_count INTEGER DEFAULT 0,
+
+    -- Review information
+    created_by UUID REFERENCES users(id),
+    reviewed_by UUID REFERENCES users(id),
+    reviewed_at TIMESTAMPTZ,
+
+    -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at TIMESTAMPTZ,
+
+    -- Constraint: Prevent duplicate imports
+    CONSTRAINT unique_source UNIQUE(source_type, source_id)
 );
 
 -- Indexes for knowledge entry lookups
-CREATE INDEX idx_knowledge_entries_product_id ON knowledge_entries(product_id);
-CREATE INDEX idx_knowledge_entries_category ON knowledge_entries(category);
-CREATE INDEX idx_knowledge_entries_verified ON knowledge_entries(verified);
-CREATE INDEX idx_knowledge_entries_created_by ON knowledge_entries(created_by);
-CREATE INDEX idx_knowledge_entries_tags ON knowledge_entries USING gin(tags);
-CREATE INDEX idx_knowledge_entries_search_vector ON knowledge_entries USING gin(search_vector);
+CREATE INDEX idx_knowledge_entries_sku ON knowledge_entries(sku);
+CREATE INDEX idx_knowledge_entries_status ON knowledge_entries(status);
+CREATE INDEX idx_knowledge_entries_category ON knowledge_entries USING GIN(category);
+CREATE INDEX idx_knowledge_entries_created_at ON knowledge_entries(created_at DESC);
 
-COMMENT ON TABLE knowledge_entries IS 'Knowledge base entries linked to products';
-COMMENT ON COLUMN knowledge_entries.search_vector IS 'Auto-generated full-text search vector';
-COMMENT ON COLUMN knowledge_entries.verified IS 'Whether this entry has been reviewed and verified';
+COMMENT ON TABLE knowledge_entries IS 'Knowledge base entries';
+COMMENT ON COLUMN knowledge_entries.source_type IS 'Source type: feishu_chat (Feishu groups) / manual (Manual entry)';
+COMMENT ON COLUMN knowledge_entries.status IS 'Status: pending (awaiting review) / draft (draft) / approved (published) / rejected (rejected)';
 
 -- ============================================================================
 -- Table: search_logs
@@ -142,22 +151,6 @@ CREATE TRIGGER update_products_updated_at BEFORE UPDATE ON products
 CREATE TRIGGER update_knowledge_entries_updated_at BEFORE UPDATE ON knowledge_entries
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Function: Update search_vector automatically for full-text search
-CREATE OR REPLACE FUNCTION update_knowledge_search_vector()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.search_vector :=
-        setweight(to_tsvector('english', COALESCE(NEW.question, '')), 'A') ||
-        setweight(to_tsvector('english', COALESCE(NEW.answer, '')), 'B') ||
-        setweight(to_tsvector('english', COALESCE(array_to_string(NEW.tags, ' '), '')), 'C');
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
--- Trigger: Auto-update search_vector for knowledge_entries
-CREATE TRIGGER update_knowledge_entries_search_vector
-BEFORE INSERT OR UPDATE ON knowledge_entries
-    FOR EACH ROW EXECUTE FUNCTION update_knowledge_search_vector();
 
 -- ============================================================================
 -- Initial Admin User
