@@ -26,6 +26,9 @@ from scripts.utils import (
 
 load_dotenv()
 
+# 确保 logs 目录存在
+Path('logs').mkdir(exist_ok=True)
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -41,6 +44,10 @@ logger = logging.getLogger(__name__)
 FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID")
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET")
 FEISHU_TECH_GROUPS = os.environ.get("FEISHU_TECH_GROUPS", "").split(",")
+
+# 验证必需的环境变量
+if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
+    raise ValueError("Missing required environment variables: FEISHU_APP_ID and FEISHU_APP_SECRET")
 
 # 群组名称映射
 GROUP_NAMES = {
@@ -74,8 +81,8 @@ def extract_text_from_message(msg):
                     if element.get('tag') == 'text':
                         text_parts.append(element.get('text', ''))
             content = ' '.join(text_parts)
-    except:
-        pass
+    except (json.JSONDecodeError, KeyError, AttributeError) as e:
+        logger.debug(f"Failed to parse message: {e}")
 
     return content
 
