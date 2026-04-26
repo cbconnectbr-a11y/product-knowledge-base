@@ -98,6 +98,9 @@ CREATE TABLE knowledge_entries (
     -- Status management
     status VARCHAR(50) DEFAULT 'pending',  -- 'pending', 'draft', 'approved', 'rejected'
 
+    -- Full-text search
+    search_vector tsvector,  -- Full-text search vector (auto-generated)
+
     -- Usage statistics
     view_count INTEGER DEFAULT 0,
     helpful_count INTEGER DEFAULT 0,
@@ -121,6 +124,7 @@ CREATE INDEX idx_knowledge_entries_sku ON knowledge_entries(sku);
 CREATE INDEX idx_knowledge_entries_status ON knowledge_entries(status);
 CREATE INDEX idx_knowledge_entries_category ON knowledge_entries USING GIN(category);
 CREATE INDEX idx_knowledge_entries_created_at ON knowledge_entries(created_at DESC);
+CREATE INDEX idx_knowledge_entries_search_vector ON knowledge_entries USING GIN(search_vector);
 
 COMMENT ON TABLE knowledge_entries IS 'Knowledge base entries';
 COMMENT ON COLUMN knowledge_entries.source_type IS 'Source type: feishu_chat (Feishu groups) / manual (Manual entry)';
@@ -172,6 +176,22 @@ CREATE TRIGGER update_products_updated_at BEFORE UPDATE ON products
 -- Trigger: Auto-update updated_at for knowledge_entries
 CREATE TRIGGER update_knowledge_entries_updated_at BEFORE UPDATE ON knowledge_entries
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Function: Auto-update search_vector for knowledge_entries
+CREATE OR REPLACE FUNCTION update_knowledge_entries_search_vector()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.search_vector := to_tsvector('english', COALESCE(NEW.title, '') || ' ' || COALESCE(NEW.content, ''));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger: Auto-update search_vector for knowledge_entries
+CREATE TRIGGER knowledge_entries_search_vector_update
+  BEFORE INSERT OR UPDATE OF title, content
+  ON knowledge_entries
+  FOR EACH ROW
+  EXECUTE FUNCTION update_knowledge_entries_search_vector();
 
 
 -- ============================================================================
