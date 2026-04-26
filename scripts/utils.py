@@ -14,6 +14,8 @@ def get_supabase_client() -> Client:
     """获取 Supabase 客户端"""
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_KEY")
+    if not url or not key:
+        raise ValueError("Missing required environment variables: SUPABASE_URL and SUPABASE_KEY")
     return create_client(url, key)
 
 # SKU 提取正则表达式（从 tech-qa-extraction 复用）

@@ -233,7 +233,13 @@ def sync_all_groups(hours=24):
 
 if __name__ == "__main__":
     # 默认同步最近 24 小时
-    hours = int(sys.argv[1]) if len(sys.argv) > 1 else 24
+    try:
+        hours = int(sys.argv[1]) if len(sys.argv) > 1 else 24
+        if hours <= 0:
+            raise ValueError("Hours must be positive")
+    except ValueError as e:
+        logger.error(f"Invalid hours argument: {e}. Usage: python3 sync_feishu_qa.py [hours]")
+        sys.exit(1)
 
     try:
         results = sync_all_groups(hours)
