@@ -29,30 +29,52 @@ COMMENT ON COLUMN users.role IS 'viewer: read-only, reviewer: can edit knowledge
 
 -- ============================================================================
 -- Table: products
--- Description: Product catalog with SKU and metadata
+-- Description: Product information table
 -- ============================================================================
-CREATE TABLE products (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    sku VARCHAR(100) UNIQUE NOT NULL,
-    name VARCHAR(500) NOT NULL,
-    category VARCHAR(200),
-    brand VARCHAR(200),
-    supplier VARCHAR(200),
-    status VARCHAR(50) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'discontinued', 'draft')),
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS products (
+  id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  sku text UNIQUE NOT NULL,
+  name_cn text,
+  name_en text,
+  category text,
+  brand text,
+
+  -- Search enhancement fields (Phase 1: manual, Phase 2+: AI-generated)
+  aliases text[],
+  search_keywords text[],
+  category_path text[],
+  search_vector tsvector,  -- Full-text search vector
+
+  -- Feishu raw data
+  feishu_raw_data jsonb NOT NULL,
+
+  -- Common fields for quick access
+  images text[],
+  package_images text[],
+  features text,
+  description text,
+  manual_files jsonb,
+  model_3d_url text,
+
+  -- Metadata
+  feishu_record_id text,
+  mabang_id text,
+  synced_at timestamp with time zone DEFAULT now(),
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now()
 );
 
 -- Indexes for product lookups
-CREATE INDEX idx_products_sku ON products(sku);
-CREATE INDEX idx_products_category ON products(category);
-CREATE INDEX idx_products_brand ON products(brand);
-CREATE INDEX idx_products_status ON products(status);
-CREATE INDEX idx_products_name_trgm ON products USING gin (name gin_trgm_ops);
+CREATE INDEX products_sku_idx ON products(sku);
+CREATE INDEX products_search_vector_idx ON products USING GIN(search_vector);
+CREATE INDEX products_name_cn_trgm_idx ON products USING GIN(name_cn gin_trgm_ops);
+CREATE INDEX products_name_en_trgm_idx ON products USING GIN(name_en gin_trgm_ops);
+CREATE INDEX products_feishu_data_idx ON products USING GIN(feishu_raw_data);
+CREATE INDEX products_aliases_idx ON products USING GIN(aliases);
 
-COMMENT ON TABLE products IS 'Product catalog with SKU and metadata';
-COMMENT ON COLUMN products.metadata IS 'Flexible JSON field for additional product attributes';
+COMMENT ON TABLE products IS 'Product information table';
+COMMENT ON COLUMN products.search_vector IS 'Full-text search vector (auto-generated)';
+COMMENT ON COLUMN products.feishu_raw_data IS 'Complete Feishu raw data (JSONB)';
 
 -- ============================================================================
 -- Table: knowledge_entries
