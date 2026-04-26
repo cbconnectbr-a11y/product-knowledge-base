@@ -1,0 +1,48 @@
+{
+  "product_table": {
+    "app_token": "${FEISHU_PRODUCT_APP_TOKEN}",
+    "table_id": "${FEISHU_PRODUCT_TABLE_ID}",
+    "field_mapping": {
+      "sku": "SKU编码",
+      "name": "产品名称",
+      "category": "产品分类",
+      "brand": "品牌",
+      "supplier": "供应商",
+      "status": "状态"
+    },
+    "sync_schedule": "0 2 * * *",
+    "description": "飞书产品信息表，每天凌晨2点同步到 Supabase"
+  },
+  "tech_groups": {
+    "group_ids": "${FEISHU_TECH_GROUP_IDS}",
+    "description": "技术群组列表，用于采集技术问答",
+    "message_types": [
+      "text",
+      "post"
+    ],
+    "filters": {
+      "min_message_length": 10,
+      "exclude_patterns": [
+        "^[打卡]",
+        "^[签到]",
+        "^早安",
+        "^晚安"
+      ]
+    }
+  },
+  "knowledge_extraction": {
+    "enabled": true,
+    "keywords": [
+      "问题",
+      "如何",
+      "为什么",
+      "怎么",
+      "解决",
+      "故障",
+      "FAQ",
+      "Q&A"
+    ],
+    "auto_verify": false,
+    "default_category": "other"
+  }
+}
