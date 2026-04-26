@@ -1,48 +1,21 @@
 {
   "product_table": {
-    "app_token": "${FEISHU_PRODUCT_APP_TOKEN}",
-    "table_id": "${FEISHU_PRODUCT_TABLE_ID}",
+    "app_token": "ZyWlbAtWLaLtw9sTpxscAGGSnub",
+    "table_id": "tbl1Zq6Sw6B5tP9x",
     "field_mapping": {
-      "sku": "SKU编码",
-      "name": "产品名称",
-      "category": "产品分类",
-      "brand": "品牌",
-      "supplier": "供应商",
-      "status": "状态"
-    },
-    "sync_schedule": "0 2 * * *",
-    "description": "飞书产品信息表，每天凌晨2点同步到 Supabase"
-  },
-  "tech_groups": {
-    "group_ids": "${FEISHU_TECH_GROUP_IDS}",
-    "description": "技术群组列表，用于采集技术问答",
-    "message_types": [
-      "text",
-      "post"
-    ],
-    "filters": {
-      "min_message_length": 10,
-      "exclude_patterns": [
-        "^[打卡]",
-        "^[签到]",
-        "^早安",
-        "^晚安"
-      ]
+      "SKU": "sku",
+      "库存SKU英文名称": "name_en",
+      "库存图片链接": "images",
+      "商品备注": "description",
+      "卖点+产品特性": "features",
+      "产品包装图": "package_images",
+      "说明书": "manual_files",
+      "3D模型": "model_3d_url"
     }
   },
-  "knowledge_extraction": {
-    "enabled": true,
-    "keywords": [
-      "问题",
-      "如何",
-      "为什么",
-      "怎么",
-      "解决",
-      "故障",
-      "FAQ",
-      "Q&A"
-    ],
-    "auto_verify": false,
-    "default_category": "other"
+  "tech_groups": {
+    "CBC004": "oc_8db7befe45b123b77b958680ed81dcea",
+    "CBC006": "oc_0166622dbb023561e492924a38920c15",
+    "CBC008": "oc_5cc2ded63967c47fd93ea22c1e3e5aeb"
   }
 }
