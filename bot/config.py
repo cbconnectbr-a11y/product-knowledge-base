@@ -16,15 +16,15 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 # 飞书配置
 FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID")
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET")
-FEISHU_VERIFICATION_TOKEN = os.environ.get("FEISHU_BOT_VERIFICATION_TOKEN", "")
-FEISHU_ENCRYPT_KEY = os.environ.get("FEISHU_BOT_ENCRYPT_KEY", "")
+FEISHU_VERIFICATION_TOKEN = os.environ.get("FEISHU_VERIFICATION_TOKEN", "")
+FEISHU_ENCRYPT_KEY = os.environ.get("FEISHU_ENCRYPT_KEY", "")
 
 # 飞书表格配置
 FEISHU_PRODUCT_TABLE_APP_TOKEN = os.environ.get("FEISHU_PRODUCT_TABLE_APP_TOKEN")
 FEISHU_PRODUCT_TABLE_TABLE_ID = os.environ.get("FEISHU_PRODUCT_TABLE_TABLE_ID")
 
 # 技术支持群
-FEISHU_TECH_GROUPS = os.environ.get("FEISHU_TECH_GROUPS", "").split(",")
+FEISHU_TECH_GROUPS = [g.strip() for g in os.environ.get("FEISHU_TECH_GROUP_IDS", "").split(",") if g.strip()]
 
 # 日志配置
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
