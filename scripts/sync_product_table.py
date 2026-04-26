@@ -106,27 +106,37 @@ def extract_field_value(field_data, field_type):
     if not field_data:
         return None
 
-    # 文本类型
+    # 文本/数字类型
     if field_type in ['Text', 'Number']:
-        return field_data[0].get('text') if isinstance(field_data, list) else field_data
+        if isinstance(field_data, list) and field_data and isinstance(field_data[0], dict):
+            return field_data[0].get('text')
+        elif isinstance(field_data, str):
+            return field_data
+        return None
 
     # URL 类型
     if field_type == 'Url':
         if isinstance(field_data, list):
-            return [item.get('link') for item in field_data if item.get('link')]
-        return field_data.get('link') if isinstance(field_data, dict) else None
+            # 验证列表中的元素，过滤掉无效的
+            return [item.get('link') for item in field_data if isinstance(item, dict) and item.get('link')]
+        elif isinstance(field_data, dict):
+            return field_data.get('link')
+        elif isinstance(field_data, str):
+            return field_data
+        return None
 
     # 附件类型
     if field_type == 'Attachment':
         if isinstance(field_data, list):
-            return [
-                {
-                    "name": att.get('name'),
-                    "url": att.get('url'),
-                    "file_token": att.get('file_token')
-                }
-                for att in field_data
-            ]
+            attachments = []
+            for att in field_data:
+                if isinstance(att, dict):
+                    attachments.append({
+                        "name": att.get('name'),
+                        "url": att.get('url'),
+                        "file_token": att.get('file_token')
+                    })
+            return attachments
         return None
 
     # 其他类型，直接返回
@@ -136,10 +146,29 @@ def process_record(record, fields_info):
     """处理单条产品记录"""
     raw_data = record.fields
 
-    # 提取 SKU（必需字段）
-    sku = raw_data.get("SKU")
+    # 提取 SKU（必需字段）- 处理多种数据格式
+    sku_raw = raw_data.get("SKU")
+
+    # 处理不同的 SKU 数据类型
+    if isinstance(sku_raw, list) and sku_raw:
+        # 飞书可能返回列表格式的文本字段
+        first_item = sku_raw[0]
+        if isinstance(first_item, dict):
+            sku = first_item.get('text')
+        elif isinstance(first_item, str):
+            sku = first_item
+        else:
+            sku = str(first_item) if first_item else None
+    elif isinstance(sku_raw, str):
+        sku = sku_raw
+    elif isinstance(sku_raw, dict):
+        # 处理字典格式（某些特殊情况）
+        sku = sku_raw.get('text')
+    else:
+        sku = None
+
     if not sku:
-        logger.warning(f"跳过：缺少 SKU - {record.record_id}")
+        logger.warning(f"跳过：缺少或无效的 SKU - {record.record_id}")
         return None
 
     # 提取字段
