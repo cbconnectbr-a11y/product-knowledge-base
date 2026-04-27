@@ -181,7 +181,7 @@ CREATE TRIGGER update_knowledge_entries_updated_at BEFORE UPDATE ON knowledge_en
 CREATE OR REPLACE FUNCTION update_knowledge_entries_search_vector()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW.search_vector := to_tsvector('english', COALESCE(NEW.title, '') || ' ' || COALESCE(NEW.content, ''));
+  NEW.search_vector := to_tsvector('simple', COALESCE(NEW.title, '') || ' ' || COALESCE(NEW.content, ''));
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

@@ -136,7 +136,7 @@ class TestSearchByKeyword:
 
         mock_table.select.return_value = mock_table
         mock_table.eq.return_value = mock_table
-        mock_table.textSearch.return_value = mock_table
+        mock_table.plfts.return_value = mock_table
         mock_table.order.return_value = mock_table
         mock_table.limit.return_value = mock_table
         mock_table.execute.return_value = mock_response
@@ -156,7 +156,7 @@ class TestSearchByKeyword:
 
         mock_table.select.return_value = mock_table
         mock_table.eq.return_value = mock_table
-        mock_table.textSearch.return_value = mock_table
+        mock_table.plfts.return_value = mock_table
         mock_table.order.return_value = mock_table
         mock_table.limit.return_value = mock_table
         mock_table.execute.return_value = mock_response
@@ -183,7 +183,7 @@ class TestSearchByKeyword:
 
         mock_table.select.return_value = mock_table
         mock_table.eq.return_value = mock_table
-        mock_table.textSearch.return_value = mock_table
+        mock_table.plfts.return_value = mock_table
         mock_table.order.return_value = mock_table
         mock_table.limit.return_value = mock_table
         mock_table.execute.return_value = mock_response

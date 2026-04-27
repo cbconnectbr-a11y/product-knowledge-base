@@ -50,12 +50,12 @@ def search_by_keyword(keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
     client = get_supabase_client()
 
     # 使用 PostgreSQL 全文搜索（tsvector/tsquery）
-    # Supabase Python SDK 的 textSearch() 方法会自动使用 to_tsquery
+    # Supabase Python SDK 使用 plfts() 方法（plainto_tsquery）
     # 搜索 search_vector 字段（由 title + content 自动生成）
     response = client.table('knowledge_entries') \
         .select('id, sku, title, content, source_group, keywords, created_at') \
         .eq('status', 'approved') \
-        .textSearch('search_vector', keyword.strip()) \
+        .plfts('search_vector', keyword.strip()) \
         .order('created_at', desc=True) \
         .limit(limit) \
         .execute()
