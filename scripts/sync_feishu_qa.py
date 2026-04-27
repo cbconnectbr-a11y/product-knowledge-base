@@ -26,15 +26,11 @@ from scripts.utils import (
 
 load_dotenv()
 
-# 确保 logs 目录存在
-Path('logs').mkdir(exist_ok=True)
-
-# 配置日志
+# 配置日志（launchd 会捕获 stdout/stderr 到日志文件）
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/sync_feishu_qa.log'),
         logging.StreamHandler()
     ]
 )

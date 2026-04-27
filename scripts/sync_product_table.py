@@ -22,13 +22,11 @@ from scripts.utils import get_supabase_client
 
 load_dotenv()
 
-# 配置日志
-Path('logs').mkdir(exist_ok=True)
+# 配置日志（launchd 会捕获 stdout/stderr 到日志文件）
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/sync_products.log'),
         logging.StreamHandler()
     ]
 )

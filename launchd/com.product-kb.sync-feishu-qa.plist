@@ -7,8 +7,8 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/homebrew/bin/python3</string>
-        <string>/Users/cindy/Projects/product-knowledge-base/scripts/sync_feishu_qa.py</string>
+        <string>/bin/bash</string>
+        <string>/Users/cindy/Projects/product-knowledge-base/scripts/run_sync_feishu_qa.sh</string>
     </array>
 
     <key>StartCalendarInterval</key>

@@ -50,12 +50,8 @@ python3 bot/main.py
 ### 4. 配置定时任务
 
 ```bash
-# 复制 plist 到 LaunchAgents
-cp config/launchd/*.plist ~/Library/LaunchAgents/
-
-# 加载定时任务
-launchctl load ~/Library/LaunchAgents/com.kb.sync.feishu.plist
-launchctl load ~/Library/LaunchAgents/com.kb.sync.products.plist
+# 使用安装脚本配置定时任务
+bash scripts/setup_launchd.sh
 ```
 
 ## 项目结构
