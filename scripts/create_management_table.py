@@ -67,8 +67,8 @@ def get_lark_client():
         .build()
 
 
-def truncate_text(text: str, max_length: int = 500) -> str:
-    """截断长文本"""
+def truncate_text(text: str, max_length: int = 2000) -> str:
+    """截断长文本（飞书文本字段支持最多 5000 字符）"""
     if not text:
         return ""
     if len(text) > max_length:
@@ -209,7 +209,7 @@ def sync_pending_to_feishu(
                 "DB_ID": [{"text": entry["id"]}],  # 数据库 ID，用于回写
                 "SKU": [{"text": entry["sku"] or ""}],
                 "标题": [{"text": entry["title"]}],
-                "内容": [{"text": truncate_text(entry["content"], 500)}],
+                "内容": [{"text": truncate_text(entry["content"], 2000)}],
                 "来源": [{"text": entry["source_group"] or ""}],
                 "关键词": [{"text": ", ".join(entry.get("keywords", []))}],
                 "创建时间": [{"text": entry["created_at"]}],
