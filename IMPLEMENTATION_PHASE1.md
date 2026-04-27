@@ -1523,7 +1523,278 @@ python3 scripts/create_management_table.py sync-all
 
 ---
 
-**文档版本**：v1.1  
+## Task 10: 历史数据导入脚本
+
+### 文件
+- `scripts/import_historical_data.py` (419行) - 历史数据导入脚本
+- `tests/test_import_historical_data.py` (347行) - 导入脚本测试
+
+### 功能概述
+
+从 `~/客服知识库/` 目录导入历史 JSON 文件到 Supabase `knowledge_entries` 表。
+
+**支持的数据格式**：
+1. **tech_issues_filtered_final.json** - SKU 相关技术问题列表
+2. **技术支持问答知识库_*.json** - 问答对（含产品名称、分类）
+3. **技术问题汇总_完整版.json** - 完整技术问题摘要
+
+### 核心功能
+
+**1. 数据提取转换**
+```python
+def extract_entries_from_tech_issues(data: Dict, source_file: str) -> List[Dict]:
+    """提取技术问题格式数据"""
+    # 从 tech_issues 数组提取
+    # SKU + 问题描述 → 知识库条目
+
+def extract_entries_from_tech_qa(data: Dict, source_file: str) -> List[Dict]:
+    """提取问答格式数据"""
+    # 从 questions 数组提取
+    # 问题 + 回答 → 完整知识条目
+
+def extract_entries_from_complete_tech_issues(data: Dict, source_file: str) -> List[Dict]:
+    """提取完整问题汇总数据"""
+    # 从 技术问题列表 提取
+    # SKU + 产品名 + 问题描述 + 分类 → 条目
+```
+
+**2. 去重机制**
+```python
+def create_source_id(title: str, content: str) -> str:
+    """生成唯一 source_id 用于去重"""
+    combined = f"{title}::{content}"
+    hash_value = hashlib.md5(combined.encode('utf-8')).hexdigest()[:16]
+    return f"historical_{hash_value}"
+```
+
+- 基于 title + content 生成 MD5 哈希
+- 格式：`historical_{hash}`
+- 数据库 unique 约束：`(source_type, source_id)`
+- 重复导入自动跳过（不报错）
+
+**3. 数据验证**
+```python
+def validate_entry(entry: Dict, verbose: bool = False) -> Tuple[bool, Optional[str]]:
+    """导入前验证条目"""
+    # 必填字段：title, content, source_id
+    # 警告：content 长度 > 5000 字符
+    # 返回：(is_valid, error_message)
+```
+
+**4. 批量导入**
+```python
+def import_entries(entries: List[Dict], source_description: str, 
+                  dry_run: bool = False, verbose: bool = False) -> Dict[str, int]:
+    """批量插入 Supabase"""
+    # 逐条插入（支持错误恢复）
+    # 统计：inserted, skipped (duplicates), errors
+    # 打印进度（每 10 条 / verbose 模式）
+```
+
+### 使用方法
+
+**基本用法**：
+```bash
+# 导入所有适合的历史数据文件
+python3 scripts/import_historical_data.py
+
+# 导入特定文件
+python3 scripts/import_historical_data.py --file ~/客服知识库/tech_issues_filtered_final.json
+
+# 预览模式（不实际导入）
+python3 scripts/import_historical_data.py --dry-run
+
+# 详细输出
+python3 scripts/import_historical_data.py --verbose
+```
+
+**输出示例**：
+```
+======================================================================
+Historical Data Import - Product Knowledge Base
+======================================================================
+Knowledge base directory: /Users/cindy/客服知识库
+Mode: LIVE IMPORT
+======================================================================
+
+Found 4 file(s) to process:
+  - tech_issues_filtered_final.json [tech_issues]
+  - 技术支持问答知识库_20260420_1022.json [tech_qa]
+  - 技术支持问答知识库_20260420_0844.json [tech_qa]
+  - 技术问题汇总_完整版.json [complete_tech_issues]
+
+======================================================================
+Processing: tech_issues_filtered_final.json
+======================================================================
+  Extracted 20 entries
+
+Importing 20 entries from tech_issues_filtered_final.json...
+  [10/20] Inserted: CBC004-1057 - 技术问题...
+  [20/20] Inserted: BRME0543 - 技术问题...
+  ✓ Inserted: 20, Skipped (duplicates): 0, Errors: 0
+
+...
+
+======================================================================
+FINAL SUMMARY
+======================================================================
+Files processed: 4
+Entries inserted: 147
+Entries skipped (duplicates): 0
+Errors: 0
+======================================================================
+```
+
+### 数据映射规则
+
+**通用字段映射**：
+| 数据库字段 | 值 | 说明 |
+|----------|---|-----|
+| `source_type` | `'manual'` | 历史数据标记为手动来源 |
+| `status` | `'pending'` | 待审核状态 |
+| `source_id` | `historical_{hash}` | 基于内容的唯一 ID |
+| `source_group` | `历史数据导入 - {filename}` | 溯源信息 |
+| `keywords` | `[]` | Phase 1 不自动生成 |
+| `created_by` | `NULL` | 历史数据无用户信息 |
+
+**格式 1：tech_issues_filtered_final.json**
+```json
+{
+  "tech_issues": [
+    {
+      "group": "CBC004",
+      "sku": "S004-1191",
+      "question": "客户投诉收到产品的时候包装完好，但内部断裂了",
+      "message_id": "om_xxx"
+    }
+  ]
+}
+```
+→ 映射：
+- `sku`: 直接使用
+- `title`: `{sku} - 技术问题`
+- `content`: `question`
+- `category`: `[群组]`（如 "CBC004"）
+
+**格式 2：技术支持问答知识库_*.json**
+```json
+{
+  "questions": [
+    {
+      "sku": "BRME0341",
+      "product": "SV608高端真空机120V",
+      "question": "客户反馈真空泵会启动...",
+      "reply": "食物装的太满了...",
+      "category": "使用方法问题",
+      "group": "CBC006"
+    }
+  ]
+}
+```
+→ 映射：
+- `sku`: 直接使用
+- `title`: `{sku} - {product}`
+- `content`: `问题：{question}\n\n解答：{reply}`
+- `category`: `[category, group]`（如 ["使用方法问题", "CBC006"]）
+
+**格式 3：技术问题汇总_完整版.json**
+```json
+{
+  "技术问题列表": [
+    {
+      "SKU": "S004-1191",
+      "产品名": "紫色带跪垫多功能健腹板",
+      "问题描述": "客户投诉...",
+      "问题类型": "运输损坏/产品质量",
+      "群组": "CBC004"
+    }
+  ]
+}
+```
+→ 映射：
+- `sku`: 使用 `SKU`
+- `title`: `{SKU} - {产品名}`
+- `content`: `问题描述`
+- `category`: `[问题类型, 群组]`
+
+### 测试覆盖
+
+**18 个单元测试**，覆盖：
+- ✅ Source ID 生成（确定性、唯一性）
+- ✅ 三种格式数据提取（正常/边界/异常）
+- ✅ 条目验证（必填字段、长内容警告）
+- ✅ 去重逻辑（相同内容 → 相同 ID）
+
+运行测试：
+```bash
+python3 -m pytest tests/test_import_historical_data.py -v
+```
+
+### 特性
+
+**1. 幂等性**
+- 多次运行安全（重复数据自动跳过）
+- 基于 `(source_type, source_id)` unique 约束
+
+**2. 错误恢复**
+- 单条失败不影响后续导入
+- 详细错误日志（记录失败条目）
+
+**3. 可追溯性**
+- `source_group` 记录源文件名
+- `source_id` 唯一标识原始内容
+
+**4. 灵活性**
+- 支持单文件 / 批量导入
+- Dry-run 模式预览
+- Verbose 模式调试
+
+### 实际导入结果（预期）
+
+基于 dry-run 测试：
+- **tech_issues_filtered_final.json**: 20 条
+- **技术支持问答知识库_20260420_0844.json**: 43 条
+- **技术支持问答知识库_20260420_1022.json**: 55 条
+- **技术问题汇总_完整版.json**: 29 条
+- **合计**: 147 条历史知识条目
+
+所有条目导入后状态为 `pending`，需通过 Task 9 的管理界面审核后发布。
+
+### 使用注意事项
+
+**环境要求**：
+- `.env` 文件配置 `SUPABASE_URL` 和 `SUPABASE_KEY`
+- `~/客服知识库/` 目录存在且包含历史数据文件
+
+**导入建议**：
+1. 首次导入前运行 `--dry-run` 预览
+2. 使用 `--verbose` 检查数据质量
+3. 导入后通过飞书管理表审核
+4. 定期备份 Supabase 数据
+
+**故障排查**：
+```bash
+# 检查环境配置
+python3 database/test_connection.py
+
+# 检查数据文件
+ls -lh ~/客服知识库/*.json
+
+# 预览单个文件
+python3 scripts/import_historical_data.py --file ~/客服知识库/tech_issues_filtered_final.json --dry-run --verbose
+```
+
+### 后续改进（Phase 2）
+
+- [ ] 自动关键词提取（AI/NLP）
+- [ ] 自动分类建议
+- [ ] 增量更新（时间戳比对）
+- [ ] 并发导入（大批量数据）
+- [ ] 数据质量报告（重复度、完整度）
+
+---
+
+**文档版本**：v1.2  
 **最后更新**：2026-04-27  
-**覆盖范围**：Tasks 1-9 (完成 9/15)
-**下一步**：Task 10 - 初始数据导入
+**覆盖范围**：Tasks 1-10 (完成 10/15)
+**下一步**：Task 11 - 集成测试
