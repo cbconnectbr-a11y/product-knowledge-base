@@ -115,6 +115,9 @@ CREATE TABLE knowledge_entries (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     published_at TIMESTAMPTZ,
 
+    -- Review notes
+    reviewer_notes TEXT,
+
     -- Constraint: Prevent duplicate imports
     CONSTRAINT unique_source UNIQUE(source_type, source_id)
 );
@@ -129,6 +132,7 @@ CREATE INDEX idx_knowledge_entries_search_vector ON knowledge_entries USING GIN(
 COMMENT ON TABLE knowledge_entries IS 'Knowledge base entries';
 COMMENT ON COLUMN knowledge_entries.source_type IS 'Source type: feishu_chat (Feishu groups) / manual (Manual entry)';
 COMMENT ON COLUMN knowledge_entries.status IS 'Status: pending (awaiting review) / draft (draft) / approved (published) / rejected (rejected)';
+COMMENT ON COLUMN knowledge_entries.reviewer_notes IS 'Reviewer notes or comments (filled by reviewer during approval process)';
 
 -- ============================================================================
 -- Table: search_logs
