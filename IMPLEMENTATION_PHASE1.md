@@ -1088,9 +1088,442 @@ d9c5f7d - feat: add comprehensive database schema with search support
 - 设计文档：`~/docs/superpowers/specs/2026-04-26-product-knowledge-base-design.md`
 - 实施计划：`~/docs/superpowers/plans/2026-04-26-product-knowledge-base-phase1.md`
 
+## Task 8: 定时任务配置
+
+### 文件
+- `launchd/com.product-kb.sync-products.plist` (40行)
+- `launchd/com.product-kb.sync-feishu-qa.plist` (40行)
+- `scripts/setup_launchd.sh` (165行)
+- `scripts/run_sync_products.sh` (17行，wrapper脚本)
+- `scripts/run_sync_feishu_qa.sh` (17行，wrapper脚本)
+
+### 功能
+
+配置 macOS launchd 定时任务，自动运行数据同步脚本：
+1. **产品表同步** - 每天 08:30
+2. **问答同步** - 每天 09:00
+
+### 核心实现
+
+#### launchd Plist 文件
+
+**com.product-kb.sync-products.plist** （产品同步）：
+```xml
+<key>Label</key>
+<string>com.product-kb.sync-products</string>
+
+<key>ProgramArguments</key>
+<array>
+    <string>/bin/bash</string>
+    <string>/Users/cindy/Projects/product-knowledge-base/scripts/run_sync_products.sh</string>
+</array>
+
+<key>StartCalendarInterval</key>
+<dict>
+    <key>Hour</key>
+    <integer>8</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+</dict>
+
+<key>StandardOutPath</key>
+<string>/Users/cindy/Projects/product-knowledge-base/logs/sync-products.log</string>
+```
+
+**关键特性**：
+- 使用 wrapper 脚本而非直接调用 Python（解决环境变量加载）
+- 日志分离：stdout 和 stderr 写入不同文件
+- `RunAtLoad` 设为 false（仅按计划执行）
+- WorkingDirectory 指定项目根目录
+
+#### Wrapper 脚本
+
+**run_sync_products.sh**：
+```bash
+#!/bin/bash
+cd /Users/cindy/Projects/product-knowledge-base
+
+# 加载环境变量
+if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
+else
+    echo "Error: .env file not found"
+    exit 1
+fi
+
+# 运行 Python 脚本
+/opt/homebrew/bin/python3 scripts/sync_product_table.py
+```
+
+**为什么需要 wrapper**：
+- launchd 不继承用户 shell 环境
+- Python 脚本的 `load_dotenv()` 仅在当前目录查找 .env
+- `set -a; source .env; set +a` 模式确保所有变量导出到子进程
+
+#### 安装脚本
+
+**setup_launchd.sh** 功能：
+1. 验证 Python、.env、脚本文件存在
+2. 创建 logs 目录
+3. 卸载旧任务（如果存在）
+4. 复制 plist 文件到 `~/Library/LaunchAgents/`
+5. 加载新任务
+6. 验证任务状态
+7. 提供手动测试命令
+
+**执行**：
+```bash
+bash scripts/setup_launchd.sh
+```
+
+**输出示例**：
+```
+========================================
+  产品知识库 - 定时任务安装脚本
+========================================
+
+✓ Python 环境正常
+✓ .env 文件存在
+✓ 同步脚本文件完整
+✓ plist 文件完整
+✓ logs 目录已创建
+
+正在安装定时任务...
+✓ 已卸载旧任务（如果存在）
+✓ plist 文件已复制
+✓ 任务加载成功
+
+验证任务状态...
+✓ com.product-kb.sync-products - 已加载
+✓ com.product-kb.sync-feishu-qa - 已加载
+
+安装完成！
+```
+
+### 关键修复记录
+
+#### Critical Fix C1-C4（初始实现）
+
+**Commit**: `bd66eb6`
+
+修复的问题：
+- **C1**: Token 验证兼容 v1/v2 事件格式
+- **C2**: 加密事件处理方法名错误
+- **C3**: receive_id_type 动态选择
+- **C4**: 消息去重线程安全
+
+#### 环境变量加载修复
+
+**Commit**: `a2b68b2`
+
+**问题**：launchd 无法加载 .env 文件，导致脚本因缺少环境变量而失败
+
+**解决方案**：
+1. 创建 wrapper 脚本加载 .env
+2. 更新 plist 调用 wrapper 而非 Python
+3. 移除 Python 脚本的 FileHandler（避免重复日志）
+
+**影响**：从无法运行到生产就绪
+
+### 日志管理
+
+**日志文件位置**：
+- `logs/sync-products.log` - 产品同步 stdout
+- `logs/sync-products.error.log` - 产品同步 stderr
+- `logs/sync-feishu-qa.log` - 问答同步 stdout
+- `logs/sync-feishu-qa.error.log` - 问答同步 stderr
+
+**Python 脚本日志配置**：
+```python
+# 只使用 StreamHandler（launchd 捕获 stdout/stderr）
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+```
+
+### 手动测试
+
+```bash
+# 立即触发任务（不等待定时）
+launchctl start com.product-kb.sync-products
+launchctl start com.product-kb.sync-feishu-qa
+
+# 查看日志
+tail -f logs/sync-products.log
+
+# 检查任务状态
+launchctl list | grep com.product-kb
+
+# 卸载任务
+launchctl unload ~/Library/LaunchAgents/com.product-kb.sync-products.plist
+```
+
+### 生产部署注意事项
+
+1. **单 Worker 模式**：当前 Python 脚本无并发冲突，但注意不要同时手动运行和定时触发
+2. **日志轮转**：生产环境建议配置 `newsyslog` 或使用 `RotatingFileHandler`
+3. **错误通知**：当前无失败告警，建议后续添加邮件/飞书通知
+4. **时区问题**：launchd 使用系统本地时间（UTC+8）
+
+### Commits
+- `dbc5692` - feat: add launchd scheduled tasks configuration
+- `a2b68b2` - fix: resolve environment loading and duplicate logs in launchd tasks
+
 ---
 
-**文档版本**：v1.0  
+## Task 9: 知识库管理后端
+
+### 文件
+- `scripts/create_management_table.py` (445行)
+- `docs/management_guide.md` (541行)
+- `database/schema.sql` (更新)
+
+### 功能
+
+创建飞书多维表格管理界面，用于审核和管理知识库条目。
+
+**核心流程**：
+```
+Supabase (pending) → Script → Feishu Table (review) 
+→ User updates → Script → Supabase (approved/rejected + notes)
+```
+
+### 核心实现
+
+#### create_management_table.py 脚本
+
+**主要命令**：
+```bash
+# 推送待审核条目到飞书
+python3 scripts/create_management_table.py sync-pending
+
+# 同步审核结果回 Supabase
+python3 scripts/create_management_table.py sync-reviews
+
+# 完整双向同步
+python3 scripts/create_management_table.py sync-all
+```
+
+**核心函数**：
+
+1. **fetch_pending_entries()** - 查询待审核条目
+```python
+def fetch_pending_entries(limit: int = 100) -> List[Dict]:
+    """从 Supabase 获取待审核的知识条目"""
+    response = supabase.table('knowledge_entries') \
+        .select('id, sku, title, content, source_group, keywords, created_at') \
+        .eq('status', 'pending') \
+        .order('created_at', desc=False) \
+        .limit(limit) \
+        .execute()
+    return response.data
+```
+
+2. **sync_pending_to_feishu()** - 推送到飞书表格
+```python
+def sync_pending_to_feishu(pending_entries: List[Dict]):
+    """将待审核条目推送到飞书多维表格"""
+    for entry in pending_entries:
+        fields = {
+            "DB_ID": [{"text": entry["id"]}],
+            "SKU": [{"text": entry["sku"] or ""}],
+            "标题": [{"text": entry["title"]}],
+            "内容": [{"text": truncate_text(entry["content"], 2000)}],
+            "来源": [{"text": entry["source_group"] or ""}],
+            "关键词": [{"text": ", ".join(entry.get("keywords", []))}],
+            "创建时间": [{"text": entry["created_at"]}],
+            "Status": [{"text": "pending"}],
+        }
+        # 创建记录...
+```
+
+3. **sync_reviews_to_supabase()** - 同步审核结果
+```python
+def sync_reviews_to_supabase(reviewed_entries: List[Dict]):
+    """将审核结果写回 Supabase"""
+    for entry in reviewed_entries:
+        status = entry.get("status")
+        if status not in VALID_STATUSES:
+            logger.warning(f"Invalid status: {status}")
+            continue
+        
+        update_data = {
+            "status": status,
+            "reviewed_at": datetime.utcnow().isoformat(),
+        }
+        if entry.get("reviewer_notes"):
+            update_data["reviewer_notes"] = entry["reviewer_notes"]
+        
+        supabase.table('knowledge_entries') \
+            .update(update_data) \
+            .eq('id', entry['db_id']) \
+            .execute()
+```
+
+#### 字段映射
+
+| Supabase 字段 | 飞书字段 | 类型 | 说明 |
+|--------------|---------|------|------|
+| `id` | `DB_ID` | 文本 | 数据库主键，用于回写 |
+| `sku` | `SKU` | 文本 | 产品 SKU 编号 |
+| `title` | `标题` | 文本 | 知识条目标题 |
+| `content` | `内容` | 富文本 | 内容（截断到 2000 字符） |
+| `status` | `Status` | 单选 | pending/approved/rejected/draft |
+| `source_group` | `来源` | 文本 | 来源群组名称 |
+| `keywords` | `关键词` | 文本 | 逗号分隔的关键词 |
+| `created_at` | `创建时间` | 文本 | 创建时间戳 |
+| `reviewer_notes` | `审核意见` | 文本 | 审核员填写的备注 |
+
+#### 审核工作流
+
+1. **推送待审核条目**：
+   ```bash
+   python3 scripts/create_management_table.py sync-pending
+   ```
+   - 查询 Supabase 中 `status='pending'` 的条目
+   - 推送到飞书多维表格
+   - 去重处理（基于 DB_ID）
+
+2. **在飞书中审核**：
+   - 审核员在飞书表格中查看条目
+   - 修改 `Status` 字段（approved/rejected）
+   - 填写 `审核意见`（可选）
+
+3. **同步审核结果**：
+   ```bash
+   python3 scripts/create_management_table.py sync-reviews
+   ```
+   - 读取飞书中已审核的条目（Status != pending）
+   - 更新 Supabase 对应记录的状态和审核时间
+   - 记录审核意见
+
+### 关键特性
+
+**数据验证**：
+```python
+VALID_STATUSES = {"pending", "approved", "rejected", "draft"}
+
+if status not in VALID_STATUSES:
+    logger.warning(f"Invalid status '{status}' for entry {db_id}, skipping")
+    continue
+```
+
+**文本截断**（避免飞书字段限制）：
+```python
+def truncate_text(text: str, max_length: int = 2000) -> str:
+    """截断长文本（飞书文本字段支持最多 5000 字符）"""
+    if len(text) > max_length:
+        return text[:max_length] + "..."
+    return text
+```
+
+**字段值提取**（处理飞书多种数据格式）：
+```python
+def extract_field_value(field_data, field_type: str):
+    """提取飞书字段值（处理文本、富文本、单选等类型）"""
+    if field_type == "Text":
+        return field_data[0].get('text') if isinstance(field_data, list) else field_data
+    elif field_type == "SingleSelect":
+        return field_data[0].get('text') if field_data else None
+    # ...
+```
+
+### Schema 更新
+
+**Commit**: `8d59555`
+
+添加 `reviewer_notes` 列到 `knowledge_entries` 表：
+```sql
+-- Review notes
+reviewer_notes TEXT,
+
+COMMENT ON COLUMN knowledge_entries.reviewer_notes IS 
+  'Reviewer notes or comments (filled by reviewer during approval process)';
+```
+
+**原因**：脚本需要将审核意见写回数据库，但初始 schema 缺少此列
+
+### 管理指南文档
+
+**docs/management_guide.md** (541行) 包含：
+
+1. **安装配置** - 飞书 Bitable 应用创建步骤
+2. **字段定义** - 完整的字段类型和配置说明
+3. **审核流程** - 图解工作流程
+4. **脚本使用** - 命令参考和示例
+5. **故障排查** - 常见错误诊断
+6. **FAQ** - 8 个常见问题解答
+7. **Phase 2 路线图** - 自动化和增强功能规划
+
+**配置示例**：
+```bash
+# .env 文件
+FEISHU_MANAGEMENT_APP_TOKEN=ZyWlbAtWLaLtw9sTpxscAGGSnub
+FEISHU_MANAGEMENT_TABLE_ID=tbl1Zq6Sw6B5tP9x
+```
+
+### Code Review 修复
+
+**Commit**: `da4eeab`
+
+修复了 Code Quality Review 发现的两个必须解决的问题：
+
+**I-1**: 添加环境变量到 .env.example
+```bash
+# 飞书管理表配置（知识库审核）
+FEISHU_MANAGEMENT_APP_TOKEN=your-management-app-token-here
+FEISHU_MANAGEMENT_TABLE_ID=your-management-table-id-here
+```
+
+**I-3**: 增加内容截断限制（500 → 2000 字符）
+```python
+"内容": [{"text": truncate_text(entry["content"], 2000)}]
+```
+
+### 生产部署
+
+**前置条件**：
+1. 在飞书中创建多维表格应用
+2. 配置 .env 文件中的 APP_TOKEN 和 TABLE_ID
+3. 在飞书表格中手动创建必需字段（按照管理指南）
+
+**首次同步**：
+```bash
+# 推送现有的待审核条目
+python3 scripts/create_management_table.py sync-pending
+
+# 审核员在飞书中处理
+
+# 同步审核结果
+python3 scripts/create_management_table.py sync-reviews
+```
+
+**定期维护**：
+```bash
+# 每天运行一次完整同步（可配置为 cron/launchd）
+python3 scripts/create_management_table.py sync-all
+```
+
+### Phase 2 增强计划
+
+1. **自动化双向同步** - Webhook 触发实时同步
+2. **批量操作** - 批量审核、批量标签
+3. **高级筛选** - 按来源、关键词、时间范围筛选
+4. **统计报表** - 审核效率、知识条目分布分析
+5. **审核员权限** - 基于飞书权限的细粒度控制
+
+### Commits
+- `75a972e` - feat: add knowledge base management interface with Feishu Bitable
+- `8d59555` - fix: add reviewer_notes column to knowledge_entries table
+- `da4eeab` - fix: address code review issues I-1 and I-3
+
+---
+
+**文档版本**：v1.1  
 **最后更新**：2026-04-27  
-**覆盖范围**：Tasks 1-7  
-**下一步**：Task 8 - 定时任务配置（launchd）
+**覆盖范围**：Tasks 1-9 (完成 9/15)
+**下一步**：Task 10 - 初始数据导入
