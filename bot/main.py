@@ -49,23 +49,25 @@ def get_lark_client():
 # 消息去重缓存（5分钟内的 message_id）
 processed_messages = {}
 CACHE_EXPIRE_SECONDS = 300
+message_cache_lock = threading.Lock()
 
 
 def is_message_processed(message_id: str) -> bool:
-    """检查消息是否已处理（去重）"""
-    current_time = time.time()
+    """检查消息是否已处理（去重）- 线程安全"""
+    with message_cache_lock:
+        current_time = time.time()
 
-    # 清理过期缓存
-    expired_keys = [k for k, v in processed_messages.items() if current_time - v > CACHE_EXPIRE_SECONDS]
-    for k in expired_keys:
-        del processed_messages[k]
+        # 清理过期缓存
+        expired_keys = [k for k, v in processed_messages.items() if current_time - v > CACHE_EXPIRE_SECONDS]
+        for k in expired_keys:
+            del processed_messages[k]
 
-    # 检查是否处理过
-    if message_id in processed_messages:
-        return True
+        # 检查是否处理过
+        if message_id in processed_messages:
+            return True
 
-    processed_messages[message_id] = current_time
-    return False
+        processed_messages[message_id] = current_time
+        return False
 
 
 @app.route('/health', methods=['GET'])
@@ -99,7 +101,7 @@ def webhook():
         # 处理加密事件
         if 'encrypt' in data and FEISHU_ENCRYPT_KEY:
             cipher = AESCipher(FEISHU_ENCRYPT_KEY)
-            decrypted = cipher.decrypt_string(data['encrypt'])
+            decrypted = cipher.decrypt_str(data['encrypt'])
             data = json.loads(decrypted)
             logger.info("Decrypted event received")
 
@@ -144,8 +146,8 @@ def process_message_async(receive_id: str, receive_id_type: str, message_text: s
         message_id: 消息 ID
     """
     try:
-        # 处理消息
-        response_text = handle_message(message_text)
+        # 处理消息（传递 receive_id 作为 user_id 用于日志）
+        response_text = handle_message(message_text, user_id=receive_id)
 
         # 发送回复
         send_reply(receive_id, receive_id_type, response_text)
