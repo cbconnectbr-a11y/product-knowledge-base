@@ -39,7 +39,7 @@ else
 
     if [ -f "$PID_FILE" ]; then
         PID=$(cat "$PID_FILE")
-        if ps -p $PID > /dev/null 2>&1; then
+        if ps -p "$PID" > /dev/null 2>&1; then
             echo -e "${GREEN}✓ Service process is running (PID: $PID)${NC}"
             exit 0
         fi

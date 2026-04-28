@@ -33,7 +33,7 @@ echo ""
 # Check if already running
 if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
-    if ps -p $PID > /dev/null 2>&1; then
+    if ps -p "$PID" > /dev/null 2>&1; then
         echo -e "${RED}Error: Service already running (PID: $PID)${NC}"
         echo "Use './scripts/stop.sh' to stop it first"
         exit 1
@@ -94,6 +94,9 @@ if [ "$MODE" = "development" ]; then
     echo -e "Health check: ${GREEN}http://localhost:$PORT/health${NC}"
     echo ""
 
+    # Setup signal handlers for graceful shutdown
+    trap 'echo ""; echo "Shutting down..."; exit 0' SIGINT SIGTERM
+
     # Run in foreground
     exec $PYTHON_CMD -m bot.main
 
@@ -108,25 +111,40 @@ elif [ "$MODE" = "production" ]; then
         exit 1
     fi
 
-    # Get port
+    # Get port and workers
     PORT="${PORT:-5000}"
+    WORKERS="${WORKERS:-1}"
 
-    # Check if port is in use
-    if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
-        echo -e "${RED}Error: Port $PORT is already in use${NC}"
-        exit 1
+    # Check if port is in use (if lsof is available)
+    if command -v lsof &> /dev/null; then
+        if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+            echo -e "${RED}Error: Port $PORT is already in use${NC}"
+            echo "Run: lsof -ti:$PORT | xargs kill -9  # to kill the process"
+            exit 1
+        fi
     fi
 
     # Start gunicorn in background
-    nohup gunicorn -w 1 -b 0.0.0.0:$PORT \
+    nohup gunicorn -w "$WORKERS" -b 0.0.0.0:$PORT \
         --access-logfile "$ACCESS_LOG" \
         --error-logfile "$ERROR_LOG" \
         --log-level info \
         bot.main:app > "$LOG_FILE" 2>&1 &
 
     # Save PID
-    echo $! > "$PID_FILE"
-    echo -e "${GREEN}✓ Service started (PID: $!)${NC}"
+    SERVICE_PID=$!
+    echo $SERVICE_PID > "$PID_FILE"
+
+    # Verify process started
+    sleep 0.5
+    if ! ps -p "$SERVICE_PID" > /dev/null 2>&1; then
+        echo -e "${RED}Error: Service failed to start${NC}"
+        echo "Check logs at: $LOG_FILE"
+        rm "$PID_FILE"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ Service started (PID: $SERVICE_PID)${NC}"
 
     echo ""
     echo -e "Service URL: ${GREEN}http://0.0.0.0:$PORT${NC}"
@@ -134,18 +152,31 @@ elif [ "$MODE" = "production" ]; then
     echo -e "Logs: ${YELLOW}$LOG_DIR/${NC}"
     echo ""
 
-    # Wait and check health
+    # Health check with retry logic
     echo "Waiting for service to be ready..."
-    sleep 3
+    MAX_ATTEMPTS=5
+    ATTEMPT=1
+    SLEEP_TIME=1
 
-    if bash "$PROJECT_ROOT/scripts/check_health.sh" 2>/dev/null; then
-        echo -e "${GREEN}✓ Health check passed${NC}"
-        echo ""
-        echo -e "${GREEN}Service is running successfully!${NC}"
-    else
-        echo -e "${YELLOW}Warning: Health check failed${NC}"
-        echo "Check logs at: $LOG_FILE"
-    fi
+    while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+        if bash "$PROJECT_ROOT/scripts/check_health.sh" 2>/dev/null; then
+            echo -e "${GREEN}✓ Health check passed (attempt $ATTEMPT/$MAX_ATTEMPTS)${NC}"
+            echo ""
+            echo -e "${GREEN}Service is running successfully!${NC}"
+            exit 0
+        fi
+
+        if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+            echo "Health check failed, retrying in ${SLEEP_TIME}s... (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+            sleep $SLEEP_TIME
+            SLEEP_TIME=$((SLEEP_TIME * 2))  # Exponential backoff
+        fi
+
+        ATTEMPT=$((ATTEMPT + 1))
+    done
+
+    echo -e "${YELLOW}Warning: Health check failed after $MAX_ATTEMPTS attempts${NC}"
+    echo "Service may still be starting up. Check logs at: $LOG_FILE"
 
 else
     echo -e "${RED}Error: Invalid mode '$MODE'${NC}"

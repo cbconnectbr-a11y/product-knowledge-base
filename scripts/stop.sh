@@ -30,7 +30,7 @@ fi
 PID=$(cat "$PID_FILE")
 
 # Check if process is running
-if ! ps -p $PID > /dev/null 2>&1; then
+if ! ps -p "$PID" > /dev/null 2>&1; then
     echo -e "${YELLOW}Service is not running (stale PID: $PID)${NC}"
     rm "$PID_FILE"
     exit 0
@@ -39,11 +39,11 @@ fi
 echo "Stopping service (PID: $PID)..."
 
 # Try graceful shutdown first (SIGTERM)
-kill $PID 2>/dev/null || true
+kill "$PID" 2>/dev/null || true
 
 # Wait up to 10 seconds for graceful shutdown
 for i in {1..10}; do
-    if ! ps -p $PID > /dev/null 2>&1; then
+    if ! ps -p "$PID" > /dev/null 2>&1; then
         echo -e "${GREEN}✓ Service stopped gracefully${NC}"
         rm "$PID_FILE"
         exit 0
@@ -59,7 +59,7 @@ kill -9 $PID 2>/dev/null || true
 sleep 1
 
 # Verify stopped
-if ! ps -p $PID > /dev/null 2>&1; then
+if ! ps -p "$PID" > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Service stopped (forced)${NC}"
     rm "$PID_FILE"
     exit 0
