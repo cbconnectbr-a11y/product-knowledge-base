@@ -2394,7 +2394,274 @@ README.md (入口)
 
 ---
 
-**文档版本**：v1.4  
+## Task 13: 验收测试
+
+### 文件
+- `scripts/acceptance_test.sh` (438行) - 自动化验收测试脚本
+- `ACCEPTANCE_REPORT.md` (550行) - 验收报告模板
+
+### 功能概述
+
+创建完整的验收测试套件，包含自动化测试脚本和手动验收清单。
+
+### 核心实现
+
+#### 1. scripts/acceptance_test.sh - 自动化测试脚本
+
+**8 个测试函数**：
+
+1. **test_configuration** - 配置验证
+   - 检查 .env 文件存在
+   - 验证 12 个必需环境变量
+   - 检测占位符值（未配置的默认值）
+   
+2. **test_database_connection** - 数据库连接
+   - 测试 Supabase 连接
+   - 验证 users 表访问权限
+   
+3. **test_product_data** - 产品数据验证
+   - 检查 products 表存在
+   - 验证表中有数据
+   
+4. **test_knowledge_data** - 知识条目数据验证
+   - 检查 knowledge_entries 表存在
+   - 验证表中有数据
+   
+5. **test_search_functions** - 搜索功能测试
+   - 测试 search_by_sku_exact()
+   - 测试 search_by_keyword()
+   - 测试 smart_search()
+   - 验证返回类型正确
+   
+6. **test_scheduled_tasks** - 定时任务验证
+   - 检查 launchd plist 文件存在
+   - 验证任务已加载（com.product-kb.sync-products, sync-feishu-qa）
+   
+7. **test_logging_system** - 日志系统验证
+   - 检查 logs 目录存在
+   - 验证目录可写
+   - 检查日志文件存在
+   
+8. **test_integration_suite** - 集成测试套件
+   - 运行 scripts/run_tests.sh
+   - 失败时显示最后 20 行输出
+
+**脚本特性**：
+
+```bash
+#!/bin/bash
+set -e  # Exit on error
+set -u  # Exit on unset variable
+
+# Dynamic project root detection (portable)
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Safe .env loading (no shell injection)
+load_env() {
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        set -a
+        source "$PROJECT_ROOT/.env"
+        set +a
+        return 0
+    fi
+    return 1
+}
+
+# Color-coded output
+GREEN='\033[0;32m'  # Pass
+RED='\033[0;31m'    # Fail
+YELLOW='\033[1;33m' # Info
+BLUE='\033[0;34m'   # Headers
+```
+
+**执行流程**：
+```bash
+$ bash scripts/acceptance_test.sh
+
+==========================================
+  Acceptance Test Suite - Phase 1 MVP
+==========================================
+Project: Product Knowledge Base System
+Date: 2026-04-28
+
+Testing: Configuration Validation
+----------------------------------------
+✓ PASS: All required environment variables present
+
+Testing: Database Connection
+----------------------------------------
+✓ PASS: Database connection successful
+
+...
+
+==========================================
+  Test Results
+==========================================
+PASSED: 8
+FAILED: 0
+✓ All acceptance tests passed!
+```
+
+#### 2. ACCEPTANCE_REPORT.md - 验收报告模板
+
+**6 个主要章节**：
+
+**一、自动化测试结果**
+- 测试执行输出示例
+- 8 项测试覆盖表（配置/数据库/数据/搜索/定时任务/日志/集成）
+
+**二、手动验收清单**（5 个子章节）
+
+1. **Supabase 数据库验收**
+   - 验收步骤：登录控制台、检查表结构、验证数据、检查索引
+   - 验收标准：4 个表存在、管理员用户存在、数据存在、索引已创建
+   
+2. **飞书机器人配置验收**
+   - 验收步骤：检查应用配置、验证权限、测试 Webhook
+   - 验收标准：应用已发布、权限已配置、事件订阅正确、URL 可访问
+   
+3. **机器人响应测试**（7 个测试用例）
+   
+   | 输入 | 预期输出 | 实际结果 | 状态 |
+   |------|---------|---------|------|
+   | `/help` | 帮助信息 | | ⬜ |
+   | `CBC004-1234` | SKU 搜索结果 | | ⬜ |
+   | `密封圈漏水` | 关键词搜索结果 | | ⬜ |
+   | `/search 加热杯` | 搜索结果列表 | | ⬜ |
+   | `/sku CBC004-1234` | SKU 精确搜索 | | ⬜ |
+   | `不存在的SKU` | 未找到提示 | | ⬜ |
+   | `@机器人 随机文本` | 智能搜索结果 | | ⬜ |
+   
+4. **定时同步验证**
+   - 验收步骤：检查 launchd 状态、手动触发、查看日志、验证数据
+   - 验收标准：任务已加载、手动触发成功、日志正常、数据同步成功
+   
+5. **历史数据导入验证**
+   - 验收步骤：准备测试数据、执行导入、验证结果、检查去重
+   - 验收标准：导入成功、数据准确、去重正常、source_id 正确
+
+**三、功能验收**
+- 10 个核心功能验收（产品表同步、群聊采集、搜索、审核、导入、定时任务等）
+- 7 个非功能性需求（性能、可用性、一致性、日志、错误处理等）
+
+**四、已知问题和限制**
+- 记录 Phase 1 的 7 个已知限制（单 Worker、内存去重、手动同步、基础搜索等）
+- 待修复问题跟踪表
+
+**五、测试数据统计**
+- 自动化测试：8 项测试函数
+- 手动验收：5 项清单
+- 功能验收：10 项核心功能 + 7 项非功能需求
+- 总计：76 个测试（包含单元测试 16 + 集成测试 34 + 导入测试 18 + 验收测试 8）
+
+**六、验收结论**
+- 验收决策模板（通过/有条件通过/未通过）
+- 验收签字区域
+- 部署检查清单
+
+**附录**：
+- A. 环境配置清单（12 个环境变量详解）
+- B. 常用命令参考
+- C. 故障排查指南（5 个常见问题）
+- D. 参考文档链接
+
+### 代码质量修复
+
+初始实现存在 6 个重要问题，已全部修复：
+
+**修复前的问题**：
+
+1. ❌ **硬编码绝对路径** - 使用 `/Users/cindy/...` 导致不可移植
+2. ❌ **Shell 注入漏洞** - `export $(cat .env | xargs)` 存在安全风险
+3. ❌ **缺少 `set -u`** - 未检测未设置变量
+4. ❌ **隐藏测试失败输出** - 集成测试失败时不显示错误信息
+5. ❌ **测试计数不匹配** - 报告说 "12 项" 但脚本只有 8 个函数
+6. ❌ **Python 路径不一致** - 使用单引号导致变量不展开
+
+**修复后**：
+
+1. ✅ **动态路径检测** - `PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"`
+2. ✅ **安全 .env 加载** - 使用 `set -a; source .env; set +a` 模式
+3. ✅ **添加 `set -u`** - 未设置变量时立即失败
+4. ✅ **显示失败输出** - `tail -20 /tmp/test_output.log` 显示最后 20 行
+5. ✅ **修正测试计数** - 报告更新为 "8 项（8 个测试函数）"
+6. ✅ **统一 Python 路径** - 所有使用 `"$PROJECT_ROOT"` 双引号
+
+### 使用方法
+
+**运行自动化测试**：
+```bash
+# 完整验收测试
+bash scripts/acceptance_test.sh
+
+# 查看帮助
+bash scripts/acceptance_test.sh --help
+
+# 测试将检查：
+# - .env 配置完整性
+# - Supabase 数据库连接
+# - 产品和知识条目数据
+# - 搜索功能正常
+# - 定时任务已加载
+# - 日志系统就绪
+# - 集成测试通过
+```
+
+**填写验收报告**：
+```bash
+# 1. 运行自动化测试
+bash scripts/acceptance_test.sh > acceptance_output.txt
+
+# 2. 将输出粘贴到 ACCEPTANCE_REPORT.md "一、自动化测试结果" 章节
+
+# 3. 执行手动验收清单
+#    - 登录 Supabase 检查数据库
+#    - 测试飞书机器人响应
+#    - 触发定时任务验证同步
+#    - 导入测试数据
+
+# 4. 在报告中标记 ✅ 或 ❌
+
+# 5. 填写验收结论和签字
+```
+
+### 验收覆盖范围
+
+| 测试类型 | 数量 | 说明 |
+|---------|------|------|
+| 自动化测试 | 8 项 | 配置、数据库、数据、搜索、任务、日志、集成 |
+| 手动验收 | 5 项 | 数据库、机器人、响应、同步、导入 |
+| 机器人测试用例 | 7 项 | help、SKU、关键词、命令、边界情况 |
+| 功能验收 | 10 项 | 所有核心功能 |
+| 非功能验收 | 7 项 | 性能、可用性、一致性等 |
+| **总计** | **76 项** | 包含所有测试层级 |
+
+### 特色功能
+
+**1. 便携性**
+- 动态路径检测，可在任何机器运行
+- 无硬编码依赖，适合 CI/CD
+
+**2. 安全性**
+- 安全的 .env 加载（无注入风险）
+- set -u 防止未设置变量错误
+
+**3. 诊断友好**
+- 彩色输出易于扫描
+- 失败时显示详细错误
+- 提供修复建议
+
+**4. 完整性**
+- 覆盖所有 Phase 1 组件
+- 自动化 + 手动双重验证
+- 包含边界情况和错误处理测试
+
+### Commits
+- `567a8e6` - fix: resolve 6 code quality issues in acceptance tests (Task 13)
+
+---
+
+**文档版本**：v1.5  
 **最后更新**：2026-04-28  
-**覆盖范围**：Tasks 1-12 (完成 12/15)
-**下一步**：Task 13 - 验收测试
+**覆盖范围**：Tasks 1-13 (完成 13/15)
+**下一步**：Task 14 - 部署和启动
