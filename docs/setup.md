@@ -425,60 +425,216 @@ launchctl unload ~/Library/LaunchAgents/com.product-kb.sync-feishu-qa.plist
 
 ## 启动服务
 
-### 开发环境
+### 使用服务管理脚本（推荐）
+
+项目提供了完整的服务管理脚本，支持开发和生产两种模式。
+
+#### 开发模式（前台运行，带调试输出）
 
 ```bash
-# 激活虚拟环境
-source venv/bin/activate
-
-# 启动 Flask 服务
-python3 bot/main.py
+# 启动开发服务器
+bash scripts/start.sh development
 
 # 预期输出：
+# ===================================
+# Product Knowledge Base - Start
+# ===================================
+# 
+# ✓ Configuration validated
+# 
+# Starting in DEVELOPMENT mode...
+# Server will run in foreground with debug output
+# Press Ctrl+C to stop
+# 
+# Service URL: http://0.0.0.0:5000
 # * Running on http://0.0.0.0:5000
-# * Serving Flask app 'main'
 ```
 
-服务启动后可访问：
-- 健康检查：http://localhost:5000/health
-- Webhook：http://localhost:5000/webhook
+开发模式特点：
+- 前台运行，实时查看日志
+- 代码变更自动重载
+- 详细的调试信息
+- 适合开发和调试
 
-### 生产环境
+按 `Ctrl+C` 停止服务。
 
-使用 Gunicorn 部署（更稳定）：
+#### 生产模式（后台运行，Gunicorn）
 
 ```bash
-# 安装 Gunicorn
-pip install gunicorn
+# 启动生产服务（后台）
+bash scripts/start.sh production
+# 或简写
+bash scripts/start.sh
 
-# 启动服务（单 Worker）
-gunicorn -w 1 -b 0.0.0.0:5000 bot.main:app
-
-# 或使用启动脚本
-bash scripts/start_bot.sh
+# 预期输出：
+# ===================================
+# Product Knowledge Base - Start
+# ===================================
+# 
+# Starting in PRODUCTION mode...
+# ✓ Service started (PID: 12345)
+# 
+# Service URL: http://0.0.0.0:5000
+# Health check: http://localhost:5000/health
+# Logs: /path/to/logs/
+# 
+# Waiting for service to be ready...
+# ✓ Health check passed
+# 
+# ✓ Service is running successfully!
 ```
 
-**重要**：当前版本仅支持单 Worker (`-w 1`)，因为消息去重使用内存缓存。多 Worker 需要使用 Redis（Phase 2 改进）。
+生产模式特点：
+- 后台运行（nohup + gunicorn）
+- 单 Worker（消息去重基于内存）
+- 自动 PID 管理，防止重复启动
+- 日志分离（access.log / error.log / bot.log）
+- 启动后自动健康检查
 
-### 后台运行
+#### 停止服务
 
-使用 screen 或 tmux：
 ```bash
-# 使用 screen
-screen -S kb-bot
-gunicorn -w 1 -b 0.0.0.0:5000 bot.main:app
-# 按 Ctrl+A 然后 D 退出
+bash scripts/stop.sh
 
-# 重新连接
-screen -r kb-bot
+# 预期输出：
+# ===================================
+# Product Knowledge Base - Stop
+# ===================================
+# 
+# Stopping service (PID: 12345)...
+# ✓ Service stopped gracefully
 ```
 
-或配置为 launchd 服务（推荐生产环境）：
+停止脚本特点：
+- 优先尝试优雅关闭（SIGTERM）
+- 等待 10 秒，超时后强制关闭（SIGKILL）
+- 自动清理 PID 文件
+- 处理僵尸进程和 stale PID
+
+#### 重启服务
+
+```bash
+# 重启（生产模式）
+bash scripts/restart.sh production
+
+# 重启（开发模式）
+bash scripts/restart.sh development
+```
+
+#### 健康检查
+
+```bash
+bash scripts/check_health.sh
+
+# 如果服务正常：
+# ✓ Service is healthy
+
+# 如果服务异常：
+# ✗ Service returned HTTP 500
+# 或
+# ✗ Service is not running
+```
+
+健康检查脚本特点：
+- 优先使用 HTTP 检查（/health 端点）
+- 降级到进程检查（PID 存在）
+- 返回明确的退出码（0=成功，1=失败）
+
+#### 查看日志
+
+```bash
+# 主日志（包含所有输出）
+tail -f logs/bot.log
+
+# 错误日志（只有 ERROR 级别）
+tail -f logs/error.log
+
+# 访问日志（HTTP 请求）
+tail -f logs/access.log
+```
+
+### 服务管理最佳实践
+
+#### 检查端口占用
+
+macOS ControlCenter 默认占用 5000 端口，可通过环境变量修改：
+
+```bash
+# 使用其他端口启动
+PORT=5001 bash scripts/start.sh production
+
+# 或在 .env 中配置
+echo "PORT=5001" >> .env
+```
+
+#### 防止重复启动
+
+启动脚本会自动检查是否已有服务运行：
+
+```bash
+$ bash scripts/start.sh
+===================================
+Product Knowledge Base - Start
+===================================
+
+Error: Service already running (PID: 12345)
+Use './scripts/stop.sh' to stop it first
+```
+
+#### 服务开机自启（可选）
+
+使用 launchd 配置服务开机自启动：
+
 ```bash
 # 创建 plist 文件
-cp launchd/com.product-kb.bot-service.plist ~/Library/LaunchAgents/
+cat > ~/Library/LaunchAgents/com.product-kb.bot-service.plist << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.product-kb.bot-service</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/YOUR_USERNAME/Projects/product-knowledge-base/scripts/start.sh</string>
+        <string>production</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Projects/product-knowledge-base/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Projects/product-knowledge-base/logs/launchd.error.log</string>
+</dict>
+</plist>
+EOF
+
+# 修改 YOUR_USERNAME 为你的用户名
+# 加载服务
 launchctl load ~/Library/LaunchAgents/com.product-kb.bot-service.plist
 ```
+
+**重要提示**：
+- 当前版本仅支持单 Worker (`-w 1`)，因为消息去重使用内存缓存
+- 多 Worker 部署需要 Redis 支持（Phase 2 改进）
+- 服务脚本已包含 PID 管理，无需额外配置
+
+### 手动启动（不推荐）
+
+如果不想使用脚本，也可以手动启动：
+
+```bash
+# 开发模式
+python3 -m bot.main
+
+# 生产模式
+gunicorn -w 1 -b 0.0.0.0:5000 bot.main:app
+```
+
+但推荐使用服务管理脚本，它提供了更好的错误处理、日志管理和进程控制。
 
 ---
 

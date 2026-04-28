@@ -55,8 +55,22 @@ cp .env.example .env
 ### 启动服务
 
 ```bash
-# 启动飞书机器人
-python3 bot/main.py
+# 开发模式（前台运行，带调试输出）
+bash scripts/start.sh development
+
+# 生产模式（后台运行，gunicorn）
+bash scripts/start.sh production
+# 或简写
+bash scripts/start.sh
+
+# 停止服务
+bash scripts/stop.sh
+
+# 重启服务
+bash scripts/restart.sh production
+
+# 健康检查
+bash scripts/check_health.sh
 
 # 配置定时任务（自动同步）
 bash scripts/setup_launchd.sh
@@ -93,7 +107,29 @@ CBC004-1234
 
 ### 管理员
 
-运行管理脚本：
+#### 服务管理
+
+```bash
+# 启动服务
+bash scripts/start.sh production       # 生产模式（后台）
+bash scripts/start.sh development      # 开发模式（前台，调试）
+
+# 停止服务
+bash scripts/stop.sh
+
+# 重启服务
+bash scripts/restart.sh production
+
+# 健康检查
+bash scripts/check_health.sh
+
+# 查看日志
+tail -f logs/bot.log        # 主日志
+tail -f logs/error.log      # 错误日志
+tail -f logs/access.log     # 访问日志
+```
+
+#### 数据管理
 
 ```bash
 # 同步产品表
@@ -139,6 +175,10 @@ product-knowledge-base/
 │   └── test_connection.py       # 连接测试
 │
 ├── scripts/                      # 数据采集和管理脚本
+│   ├── start.sh                 # 启动服务（生产/开发模式）
+│   ├── stop.sh                  # 停止服务
+│   ├── restart.sh               # 重启服务
+│   ├── check_health.sh          # 健康检查
 │   ├── sync_product_table.py    # 产品表同步
 │   ├── sync_feishu_qa.py        # 群聊问答采集
 │   ├── create_management_table.py # 审核管理
