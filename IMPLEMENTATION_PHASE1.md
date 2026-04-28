@@ -2661,7 +2661,400 @@ bash scripts/acceptance_test.sh > acceptance_output.txt
 
 ---
 
-**文档版本**：v1.5  
+## Task 14: 部署和启动
+
+### 文件
+- `scripts/start.sh` (4.3K) - 服务启动脚本
+- `scripts/stop.sh` (1.5K) - 服务停止脚本
+- `scripts/restart.sh` (873B) - 服务重启脚本
+- `scripts/check_health.sh` (1.3K) - 健康检查脚本
+- `requirements.txt` (更新) - 添加 gunicorn
+- 文档更新（README.md, docs/setup.md）
+
+### 功能概述
+
+创建完整的服务管理脚本，支持 Flask Webhook 服务的生产部署和开发调试。
+
+### 核心实现
+
+#### 1. scripts/start.sh - 启动服务
+
+**双模式支持**：
+
+**生产模式**（后台运行）：
+```bash
+bash scripts/start.sh production
+
+# 或使用环境变量定制
+PORT=8000 WORKERS=2 bash scripts/start.sh production
+```
+
+**开发模式**（前台运行）：
+```bash
+bash scripts/start.sh development
+```
+
+**关键特性**：
+
+**PID 文件管理**：
+```bash
+# Check if already running
+if [ -f "$PID_FILE" ]; then
+    PID=$(cat "$PID_FILE")
+    if ps -p "$PID" > /dev/null 2>&1; then
+        echo "Service already running (PID: $PID)"
+        exit 1
+    fi
+fi
+
+# Save PID and verify
+SERVICE_PID=$!
+echo $SERVICE_PID > "$PID_FILE"
+
+# Verify process started
+sleep 0.5
+if ! ps -p "$SERVICE_PID" > /dev/null 2>&1; then
+    echo "Error: Service failed to start"
+    rm "$PID_FILE"
+    exit 1
+fi
+```
+
+**环境变量验证**：
+- 检查 .env 文件存在
+- 验证 Python 可用
+- 检查 gunicorn 已安装（生产模式）
+- 验证配置有效性
+
+**端口冲突检测**：
+```bash
+# Check if port is in use (if lsof is available)
+if command -v lsof &> /dev/null; then
+    if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+        echo "Error: Port $PORT is already in use"
+        exit 1
+    fi
+fi
+```
+
+**健康检查重试**（指数退避）：
+```bash
+# Health check with retry logic
+MAX_ATTEMPTS=5
+ATTEMPT=1
+SLEEP_TIME=1
+
+while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+    if bash scripts/check_health.sh 2>/dev/null; then
+        echo "✓ Health check passed (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+        exit 0
+    fi
+
+    if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+        echo "Retrying in ${SLEEP_TIME}s..."
+        sleep $SLEEP_TIME
+        SLEEP_TIME=$((SLEEP_TIME * 2))  # Exponential backoff
+    fi
+
+    ATTEMPT=$((ATTEMPT + 1))
+done
+```
+- 重试间隔：1s → 2s → 4s → 8s → 16s
+- 最多 5 次尝试
+- 失败后给出日志路径
+
+**信号处理**（开发模式）：
+```bash
+# Setup signal handlers for graceful shutdown
+trap 'echo ""; echo "Shutting down..."; exit 0' SIGINT SIGTERM
+```
+
+#### 2. scripts/stop.sh - 停止服务
+
+**优雅停止流程**：
+
+```bash
+# Try graceful shutdown first (SIGTERM)
+kill "$PID" 2>/dev/null || true
+
+# Wait up to 10 seconds for graceful shutdown
+for i in {1..10}; do
+    if ! ps -p "$PID" > /dev/null 2>&1; then
+        echo "✓ Service stopped gracefully"
+        rm "$PID_FILE"
+        exit 0
+    fi
+    sleep 1
+done
+
+# Force kill if still running (SIGKILL)
+echo "Forcing shutdown..."
+kill -9 "$PID" 2>/dev/null || true
+
+# Verify stopped
+if ! ps -p "$PID" > /dev/null 2>&1; then
+    echo "✓ Service stopped (forced)"
+    rm "$PID_FILE"
+    exit 0
+fi
+```
+
+**特性**：
+- 优先 SIGTERM（优雅停止）
+- 10 秒超时
+- 回退到 SIGKILL（强制停止）
+- 自动清理 PID 文件
+- 处理陈旧 PID 文件
+
+#### 3. scripts/restart.sh - 重启服务
+
+```bash
+#!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "Restarting service..."
+
+# Stop service
+bash "$SCRIPT_DIR/stop.sh"
+
+# Wait a moment
+sleep 2
+
+# Start service
+bash "$SCRIPT_DIR/start.sh" "$@"
+```
+
+- 调用 stop.sh 和 start.sh
+- 传递模式参数（production/development）
+- 2 秒清理缓冲
+
+#### 4. scripts/check_health.sh - 健康检查
+
+**双检查策略**：
+
+```bash
+# Primary: HTTP health check
+HEALTH_URL="http://localhost:5000/health"
+
+if command -v curl &> /dev/null; then
+    RESPONSE=$(curl -s -w "\n%{http_code}" "$HEALTH_URL" 2>/dev/null || echo "000")
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    
+    if [ "$HTTP_CODE" = "200" ]; then
+        echo "✓ Service is healthy"
+        exit 0
+    else
+        echo "✗ Service returned HTTP $HTTP_CODE"
+        exit 1
+    fi
+else
+    # Fallback: PID-based check
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if ps -p "$PID" > /dev/null 2>&1; then
+            echo "✓ Service process is running (PID: $PID)"
+            exit 0
+        fi
+    fi
+    echo "✗ Service is not running"
+    exit 1
+fi
+```
+
+- 主检查：HTTP /health 端点
+- 回退检查：进程存在性
+- 彩色输出
+- 适合监控集成
+
+### 生产部署配置
+
+**环境变量**：
+```bash
+# 在 .env 或启动前设置
+PORT=5000              # 服务端口（默认 5000）
+WORKERS=1              # Gunicorn worker 数量（默认 1）
+DEBUG=false            # 调试模式（生产环境关闭）
+```
+
+**启动命令**：
+```bash
+# 生产模式（推荐）
+PORT=5000 WORKERS=1 bash scripts/start.sh production
+
+# 检查状态
+bash scripts/check_health.sh
+
+# 查看日志
+tail -f logs/bot.log
+tail -f logs/access.log  # Gunicorn 访问日志
+tail -f logs/error.log   # Gunicorn 错误日志
+```
+
+**停止和重启**：
+```bash
+# 停止服务
+bash scripts/stop.sh
+
+# 重启服务
+bash scripts/restart.sh production
+```
+
+### 代码质量修复
+
+初始实现存在 6 个生产就绪问题，已全部修复：
+
+#### 修复前的问题
+
+1. ❌ **PID 竞态条件** - 保存 PID 后未验证进程实际运行
+2. ❌ **未引号变量** - `ps -p $PID` 可能因空值或空格失败
+3. ❌ **lsof 可移植性** - 部分系统无 lsof 命令导致脚本失败
+4. ❌ **开发模式无信号处理** - Ctrl+C 无法优雅退出
+5. ❌ **健康检查时序固定** - 3 秒固定等待不可靠
+6. ❌ **硬编码单 worker** - 无法根据负载调整
+
+#### 修复后
+
+1. ✅ **PID 验证** - 保存后立即验证进程存在，失败时清理 PID 文件
+   ```bash
+   sleep 0.5
+   if ! ps -p "$SERVICE_PID" > /dev/null 2>&1; then
+       rm "$PID_FILE"
+       exit 1
+   fi
+   ```
+
+2. ✅ **引号保护** - 所有变量引用加引号 `"$PID"`，防止词分割
+
+3. ✅ **lsof 可移植性** - 检查命令存在再使用
+   ```bash
+   if command -v lsof &> /dev/null; then
+       if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+           echo "Port in use"
+       fi
+   fi
+   ```
+
+4. ✅ **信号处理** - 开发模式添加 trap 处理器
+   ```bash
+   trap 'echo "Shutting down..."; exit 0' SIGINT SIGTERM
+   ```
+
+5. ✅ **智能重试** - 指数退避重试（1s, 2s, 4s, 8s, 16s），最多 5 次
+
+6. ✅ **可配置 workers** - 通过 `WORKERS` 环境变量设置
+   ```bash
+   WORKERS="${WORKERS:-1}"
+   gunicorn -w "$WORKERS" ...
+   ```
+
+### 使用场景
+
+**场景 1：开发调试**
+```bash
+# 前台运行，实时查看日志
+bash scripts/start.sh development
+
+# Ctrl+C 停止
+```
+
+**场景 2：生产部署**
+```bash
+# 后台启动
+bash scripts/start.sh production
+
+# 验证健康
+bash scripts/check_health.sh
+
+# 测试机器人
+curl -X POST http://localhost:5000/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"challenge": "test"}'
+```
+
+**场景 3：代码更新重启**
+```bash
+# 拉取最新代码
+git pull origin master
+
+# 重启服务
+bash scripts/restart.sh production
+
+# 验证启动
+bash scripts/check_health.sh
+```
+
+**场景 4：性能调优**
+```bash
+# 增加 worker 数量（处理并发）
+WORKERS=4 bash scripts/restart.sh production
+
+# 注意：当前 Phase 1 使用内存去重，限制为单 worker
+# 多 worker 支持需要 Redis（Phase 2）
+```
+
+### 日志管理
+
+**日志文件**：
+- `logs/bot.log` - 主应用日志（nohup 输出）
+- `logs/access.log` - HTTP 访问日志（Gunicorn）
+- `logs/error.log` - 错误日志（Gunicorn）
+
+**日志查看**：
+```bash
+# 实时查看主日志
+tail -f logs/bot.log
+
+# 查看最近错误
+tail -50 logs/error.log | grep ERROR
+
+# 查看访问统计
+awk '{print $9}' logs/access.log | sort | uniq -c | sort -rn
+```
+
+**日志轮转**（推荐生产配置）：
+```bash
+# /etc/logrotate.d/product-kb
+/Users/cindy/Projects/product-knowledge-base/logs/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 cindy staff
+}
+```
+
+### 特色功能
+
+**1. 可移植性**
+- 动态路径检测
+- lsof 回退兼容
+- 跨平台 shell 命令
+
+**2. 健壮性**
+- PID 验证防止竞态
+- 引号保护防止注入
+- 陈旧文件自动清理
+
+**3. 用户体验**
+- 彩色输出区分状态
+- 详细错误信息
+- 修复建议提示
+
+**4. 生产就绪**
+- 健康检查自动化
+- 优雅停止机制
+- 日志完整记录
+- 配置灵活可调
+
+### Commits
+- `e055adf` - feat: add service management scripts for deployment (Task 14)
+- `b1ab0f0` - fix: resolve 6 production readiness issues in deployment scripts (Task 14)
+
+---
+
+**文档版本**：v1.6  
 **最后更新**：2026-04-28  
-**覆盖范围**：Tasks 1-13 (完成 13/15)
-**下一步**：Task 14 - 部署和启动
+**覆盖范围**：Tasks 1-14 (完成 14/15)
+**下一步**：Task 15 - 交付和归档
