@@ -67,3 +67,9 @@ coverage.xml
 *.sqlite
 *.sqlite3
 database/migrations/
+
+# Data files
+data/duoke/*.xlsx
+data/duoke/archive/*.xlsx
+data/duoke/import_queue.json
+.env.backup
