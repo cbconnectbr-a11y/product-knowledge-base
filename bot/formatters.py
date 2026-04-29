@@ -50,9 +50,46 @@ def format_knowledge_entry(entry: Dict[str, Any]) -> str:
     # 格式化输出
     formatted = f"❓ {title}{sku_info}\n"
     formatted += f"💡 {content}\n"
-    formatted += f"📅 {date_str} | {source_group}"
+    formatted += f"📅 {date_str} | {source_group}\n"
 
-    return formatted
+    # 产品图片（如果有）
+    images = entry.get('images')
+    if images and isinstance(images, list) and len(images) > 0:
+        formatted += f"\n📷 产品图片:\n"
+        for i, img in enumerate(images[:3], 1):  # 最多显示3张
+            formatted += f"  {i}. {img}\n"
+
+    # 包装图片（如果有）
+    package_images = entry.get('package_images')
+    if package_images and isinstance(package_images, list) and len(package_images) > 0:
+        formatted += f"\n📦 包装图片:\n"
+        for i, img in enumerate(package_images[:3], 1):
+            formatted += f"  {i}. {img}\n"
+
+    # 说明书（如果有）
+    manual_files = entry.get('manual_files')
+    if manual_files:
+        formatted += f"\n📖 说明书:\n"
+        if isinstance(manual_files, dict):
+            # 单个说明书（字典格式）
+            manual_name = manual_files.get('text', manual_files.get('name', '说明书'))
+            manual_url = manual_files.get('link', manual_files.get('url', ''))
+            if manual_url:
+                formatted += f"  • {manual_name}: {manual_url}\n"
+            else:
+                formatted += f"  • {manual_name}\n"
+        elif isinstance(manual_files, list):
+            # 多个说明书（列表格式）
+            for manual in manual_files:
+                if isinstance(manual, dict):
+                    manual_name = manual.get('text', manual.get('name', '说明书'))
+                    manual_url = manual.get('link', manual.get('url', ''))
+                    if manual_url:
+                        formatted += f"  • {manual_name}: {manual_url}\n"
+                    else:
+                        formatted += f"  • {manual_name}\n"
+
+    return formatted.rstrip()
 
 
 def format_search_results(results: List[Dict[str, Any]], search_type: str, query: str) -> str:

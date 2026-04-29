@@ -7,6 +7,84 @@ from typing import List, Dict, Any, Optional
 from scripts.utils import get_supabase_client, extract_sku
 
 
+def search_products_by_sku(sku: str) -> List[Dict[str, Any]]:
+    """
+    在产品表中搜索 SKU
+
+    Args:
+        sku: SKU 编号
+
+    Returns:
+        匹配的产品列表
+    """
+    if not sku or not sku.strip():
+        return []
+
+    client = get_supabase_client()
+
+    response = client.table('products') \
+        .select('sku, name_cn, name_en, features, description, searchable_content, images, package_images, manual_files') \
+        .eq('sku', sku.strip().upper()) \
+        .execute()
+
+    # 转换为统一格式（与 knowledge_entries 兼容）
+    results = []
+    for item in (response.data or []):
+        results.append({
+            'id': item.get('sku'),  # 使用 SKU 作为 ID
+            'sku': item.get('sku'),
+            'title': f"{item.get('name_cn') or item.get('name_en')} [{item.get('sku')}]",
+            'content': item.get('searchable_content') or item.get('features') or item.get('description') or '',
+            'source_group': '产品信息',
+            'source_type': 'product',
+            'images': item.get('images'),
+            'package_images': item.get('package_images'),
+            'manual_files': item.get('manual_files'),
+        })
+
+    return results
+
+
+def search_products_by_keyword(keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    在产品表中搜索关键词（全文搜索）
+
+    Args:
+        keyword: 搜索关键词
+        limit: 最大返回结果数量
+
+    Returns:
+        匹配的产品列表
+    """
+    if not keyword or not keyword.strip():
+        return []
+
+    client = get_supabase_client()
+
+    response = client.table('products') \
+        .select('sku, name_cn, name_en, features, description, searchable_content, images, package_images, manual_files') \
+        .plfts('search_vector', keyword.strip()) \
+        .limit(limit) \
+        .execute()
+
+    # 转换为统一格式
+    results = []
+    for item in (response.data or []):
+        results.append({
+            'id': item.get('sku'),
+            'sku': item.get('sku'),
+            'title': f"{item.get('name_cn') or item.get('name_en')} [{item.get('sku')}]",
+            'content': item.get('searchable_content') or item.get('features') or item.get('description') or '',
+            'source_group': '产品信息',
+            'source_type': 'product',
+            'images': item.get('images'),
+            'package_images': item.get('package_images'),
+            'manual_files': item.get('manual_files'),
+        })
+
+    return results
+
+
 def search_by_sku_exact(sku: str) -> List[Dict[str, Any]]:
     """
     SKU 精确匹配搜索
@@ -125,8 +203,13 @@ def smart_search(query: str, limit: int = 10) -> Dict[str, Any]:
     extracted_sku = extract_sku(query)
 
     if extracted_sku:
-        # 如果找到 SKU，使用 SKU 精确搜索
-        results = search_by_sku_exact(extracted_sku)
+        # 如果找到 SKU，使用 SKU 精确搜索（同时搜索产品和知识库）
+        product_results = search_products_by_sku(extracted_sku)
+        knowledge_results = search_by_sku_exact(extracted_sku)
+
+        # 合并结果：产品信息优先
+        results = product_results + knowledge_results
+
         return {
             'results': results,
             'search_type': 'sku',
@@ -134,8 +217,13 @@ def smart_search(query: str, limit: int = 10) -> Dict[str, Any]:
             'extracted_sku': extracted_sku
         }
     else:
-        # 否则使用关键词搜索
-        results = search_by_keyword(query, limit=limit)
+        # 否则使用关键词搜索（同时搜索产品和知识库）
+        product_results = search_products_by_keyword(query, limit=limit)
+        knowledge_results = search_by_keyword(query, limit=limit)
+
+        # 合并结果：产品信息优先
+        results = product_results + knowledge_results
+
         return {
             'results': results,
             'search_type': 'keyword',

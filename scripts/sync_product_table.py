@@ -77,12 +77,16 @@ def fetch_all_records(client):
     page_token = None
 
     while True:
-        request = ListAppTableRecordRequest.builder() \
+        # 构建请求（首次请求不包含 page_token）
+        builder = ListAppTableRecordRequest.builder() \
             .app_token(APP_TOKEN) \
             .table_id(TABLE_ID) \
-            .page_size(500) \
-            .page_token(page_token) \
-            .build()
+            .page_size(500)
+
+        if page_token:
+            builder = builder.page_token(page_token)
+
+        request = builder.build()
 
         response = client.bitable.v1.app_table_record.list(request)
 
@@ -90,6 +94,7 @@ def fetch_all_records(client):
             raise Exception(f"获取记录失败: {response.code} - {response.msg}")
 
         records.extend(response.data.items)
+        logger.info(f"已读取 {len(records)} 条记录...")
 
         if not response.data.has_more:
             break
@@ -145,7 +150,8 @@ def process_record(record, fields_info):
     raw_data = record.fields
 
     # 提取 SKU（必需字段）- 处理多种数据格式
-    sku_raw = raw_data.get("SKU")
+    # 尝试多种可能的字段名称
+    sku_raw = raw_data.get("*库存sku编号") or raw_data.get("SKU") or raw_data.get("库存SKU编号")
 
     # 处理不同的 SKU 数据类型
     if isinstance(sku_raw, list) and sku_raw:
@@ -169,10 +175,11 @@ def process_record(record, fields_info):
         logger.warning(f"跳过：缺少或无效的 SKU - {record.record_id}")
         return None
 
-    # 提取字段
-    name_en = raw_data.get("库存SKU英文名称", "")
-    description = raw_data.get("商品备注", "")
-    features = raw_data.get("卖点+产品特性", "")
+    # 提取字段（尝试多种可能的字段名）
+    name_en = raw_data.get("库存SKU英文名称") or raw_data.get("主SKU英文名称") or ""
+    name_cn = raw_data.get("库存SKU中文名称") or raw_data.get("主SKU中文名称") or raw_data.get("产品名称") or ""
+    description = raw_data.get("商品备注") or ""
+    features = raw_data.get("卖点+产品特性") or ""
 
     # 提取URL和附件
     images_raw = raw_data.get("库存图片链接")
@@ -194,9 +201,41 @@ def process_record(record, fields_info):
         fields_info.get("3D模型", "Url")
     )
 
-    # Phase 1: 简单的中文名称提取（从英文名称或特性中提取）
-    # Phase 2+ 将使用 AI 生成
-    name_cn = raw_data.get("产品名称") or name_en  # 如果有中文名称字段就用
+    # 如果中文名称为空，使用英文名称作为后备
+    if not name_cn:
+        name_cn = name_en
+
+    # 构建所有字段的可搜索文本（让所有部门都能查询到所有信息）
+    searchable_content_parts = [
+        f"SKU: {sku}",
+        f"产品名称: {name_cn}",
+        f"英文名称: {name_en}" if name_en else "",
+        f"产品特性: {features}" if features else "",
+        f"商品备注: {description}" if description else "",
+    ]
+
+    # 添加所有其他文本字段到可搜索内容
+    for field_name, field_value in raw_data.items():
+        # 跳过已处理的字段和空值
+        if field_name in ["*库存sku编号", "库存SKU中文名称", "主SKU中文名称",
+                         "库存SKU英文名称", "卖点+产品特性", "商品备注"]:
+            continue
+
+        # 提取文本内容
+        if field_value:
+            if isinstance(field_value, str):
+                searchable_content_parts.append(f"{field_name}: {field_value}")
+            elif isinstance(field_value, (int, float)):
+                searchable_content_parts.append(f"{field_name}: {field_value}")
+            elif isinstance(field_value, list) and field_value:
+                # 提取列表中的文本
+                for item in field_value:
+                    if isinstance(item, dict) and 'text' in item:
+                        searchable_content_parts.append(f"{field_name}: {item['text']}")
+                    elif isinstance(item, str):
+                        searchable_content_parts.append(f"{field_name}: {item}")
+
+    searchable_content = "\n".join([p for p in searchable_content_parts if p])
 
     # 构建产品数据
     product_data = {
@@ -205,6 +244,7 @@ def process_record(record, fields_info):
         "name_cn": name_cn,
         "description": description,
         "features": features,
+        "searchable_content": searchable_content,  # 所有字段的可搜索文本
         "images": images,
         "package_images": [img.get('url') for img in package_images] if package_images else [],
         "manual_files": manual_files,

@@ -20,6 +20,8 @@ from bot.config import (
     validate_config
 )
 from bot.handlers import handle_message
+from bot.file_handler import handle_file_message
+from bot.queue_manager import get_queue_processor
 
 # 配置日志
 logging.basicConfig(
@@ -135,19 +137,20 @@ def webhook():
         return jsonify({'error': str(e)}), 500
 
 
-def process_message_async(receive_id: str, receive_id_type: str, message_text: str, message_id: str):
+def process_message_async(receive_id: str, receive_id_type: str, message_text: str, message_id: str, user_id: str = None):
     """
     异步处理消息（在后台线程中运行）
 
     Args:
-        receive_id: 接收者 ID
+        receive_id: 接收者 ID（私聊为用户 ID，群聊为 chat_id）
         receive_id_type: ID 类型
         message_text: 消息文本
         message_id: 消息 ID
+        user_id: 发送者用户 ID（用于日志记录）
     """
     try:
-        # 处理消息（传递 receive_id 作为 user_id 用于日志）
-        response_text = handle_message(message_text, user_id=receive_id)
+        # 处理消息（使用实际发送者 ID 用于日志）
+        response_text = handle_message(message_text, user_id=user_id or receive_id)
 
         # 发送回复
         send_reply(receive_id, receive_id_type, response_text)
@@ -155,6 +158,33 @@ def process_message_async(receive_id: str, receive_id_type: str, message_text: s
         logger.info(f"Message {message_id} processed successfully")
     except Exception as e:
         logger.error(f"Error processing message {message_id}: {e}", exc_info=True)
+
+
+def process_file_async(receive_id: str, receive_id_type: str, file_key: str, file_name: str, message_id: str):
+    """
+    异步处理文件消息（在后台线程中运行）
+
+    Args:
+        receive_id: 接收者 ID
+        receive_id_type: ID 类型
+        file_key: 文件 key
+        file_name: 文件名
+        message_id: 消息 ID
+    """
+    try:
+        # 获取飞书客户端
+        client = get_lark_client()
+
+        # 处理文件
+        response_text = handle_file_message(client, message_id, file_key, file_name)
+
+        # 如果有回复消息，发送回复
+        if response_text:
+            send_reply(receive_id, receive_id_type, response_text)
+
+        logger.info(f"File message {message_id} processed successfully")
+    except Exception as e:
+        logger.error(f"Error processing file message {message_id}: {e}", exc_info=True)
 
 
 def handle_message_event(event_data: dict) -> tuple:
@@ -173,59 +203,105 @@ def handle_message_event(event_data: dict) -> tuple:
         message = event.get('message', {})
         sender = event.get('sender', {})
 
+        # 忽略机器人自己发送的消息（防止循环）
+        sender_type = sender.get('sender_type')
+        if sender_type == 'app' or sender_type == 'bot':
+            logger.info(f"Ignored message from bot/app (sender_type: {sender_type})")
+            return jsonify({'msg': 'ok'}), 200
+
         # 提取消息信息
         message_id = message.get('message_id')
         message_type = message.get('message_type')
         content_str = message.get('content', '{}')
+        chat_type = message.get('chat_type', 'p2p')  # p2p 或 group
+        chat_id = message.get('chat_id')
 
-        # 提取发送者信息并确定 receive_id 和类型（优先使用 open_id，更通用）
-        sender_id = sender.get('sender_id', {})
-        if sender_id.get('open_id'):
-            receive_id = sender_id['open_id']
-            receive_id_type = 'open_id'
-        elif sender_id.get('user_id'):
-            receive_id = sender_id['user_id']
-            receive_id_type = 'user_id'
-        elif sender_id.get('union_id'):
-            receive_id = sender_id['union_id']
-            receive_id_type = 'union_id'
+        # 确定回复目标：群聊回复到群，私聊回复给发送者
+        if chat_type == 'group' and chat_id:
+            # 群聊消息：回复到群
+            receive_id = chat_id
+            receive_id_type = 'chat_id'
+            logger.info(f"Group message in chat: {chat_id}")
         else:
-            logger.error("No valid sender id found")
-            return jsonify({'msg': 'ok'}), 200
-
-        # 只处理文本消息
-        if message_type != 'text':
-            logger.info(f"Ignored non-text message type: {message_type}")
-            return jsonify({'msg': 'ok'}), 200
-
-        # 解析消息内容
-        try:
-            content_json = json.loads(content_str)
-            message_text = content_json.get('text', '').strip()
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse message content: {content_str}")
-            return jsonify({'msg': 'ok'}), 200
-
-        if not message_text:
-            logger.info("Received empty message")
-            return jsonify({'msg': 'ok'}), 200
-
-        logger.info(f"Received message: {message_text}")
+            # 私聊消息：回复给发送者
+            sender_id = sender.get('sender_id', {})
+            if sender_id.get('open_id'):
+                receive_id = sender_id['open_id']
+                receive_id_type = 'open_id'
+            elif sender_id.get('user_id'):
+                receive_id = sender_id['user_id']
+                receive_id_type = 'user_id'
+            elif sender_id.get('union_id'):
+                receive_id = sender_id['union_id']
+                receive_id_type = 'union_id'
+            else:
+                logger.error("No valid sender id found")
+                return jsonify({'msg': 'ok'}), 200
+            logger.info(f"Private message from: {receive_id}")
 
         # 消息去重
         if is_message_processed(message_id):
             logger.info(f"Message {message_id} already processed, skipping")
             return jsonify({'msg': 'ok'}), 200
 
-        # 异步处理消息（立即返回 200）
-        thread = threading.Thread(
-            target=process_message_async,
-            args=(receive_id, receive_id_type, message_text, message_id)
-        )
-        thread.daemon = True
-        thread.start()
+        # 获取发送者 ID 用于日志记录
+        sender_id = sender.get('sender_id', {})
+        user_id_for_log = (sender_id.get('open_id') or
+                          sender_id.get('user_id') or
+                          sender_id.get('union_id') or
+                          'unknown')
 
-        # 立即返回 200
+        # 处理文件消息（多客汇总自动导入）
+        if message_type == 'file':
+            try:
+                content_json = json.loads(content_str)
+                file_key = content_json.get('file_key')
+                file_name = content_json.get('file_name', 'unknown.file')
+
+                logger.info(f"Received file: {file_name} (key: {file_key})")
+
+                # 异步处理文件
+                thread = threading.Thread(
+                    target=process_file_async,
+                    args=(receive_id, receive_id_type, file_key, file_name, message_id)
+                )
+                thread.daemon = True
+                thread.start()
+
+                return jsonify({'msg': 'ok'}), 200
+
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse file content: {content_str}")
+                return jsonify({'msg': 'ok'}), 200
+
+        # 处理文本消息
+        if message_type == 'text':
+            # 解析消息内容
+            try:
+                content_json = json.loads(content_str)
+                message_text = content_json.get('text', '').strip()
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse message content: {content_str}")
+                return jsonify({'msg': 'ok'}), 200
+
+            if not message_text:
+                logger.info("Received empty message")
+                return jsonify({'msg': 'ok'}), 200
+
+            logger.info(f"Received message: {message_text}")
+
+            # 异步处理文本消息（立即返回 200）
+            thread = threading.Thread(
+                target=process_message_async,
+                args=(receive_id, receive_id_type, message_text, message_id, user_id_for_log)
+            )
+            thread.daemon = True
+            thread.start()
+
+            return jsonify({'msg': 'ok'}), 200
+
+        # 其他消息类型暂不处理
+        logger.info(f"Ignored message type: {message_type}")
         return jsonify({'msg': 'ok'}), 200
 
     except Exception as e:
@@ -296,6 +372,10 @@ def init_app():
         # 预初始化飞书客户端
         get_lark_client()
         logger.info("Lark client initialized successfully")
+
+        # 启动队列处理器
+        get_queue_processor()
+        logger.info("Queue processor started successfully")
 
         return True
     except Exception as e:
