@@ -29,6 +29,7 @@ import re
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.utils import get_supabase_client, extract_sku
+from scripts.clean_content import clean_customer_service_content
 
 # 配置日志
 logging.basicConfig(
@@ -246,6 +247,9 @@ def process_duoke_record(row, file_date: str) -> dict:
     content_parts.append(f"## 对话记录\n{content}")
 
     full_content = '\n\n'.join(content_parts)
+
+    # 清洗内容（移除 JSON 系统消息和无用信息）
+    full_content = clean_customer_service_content(full_content)
 
     # 构建知识库条目
     entry = {
