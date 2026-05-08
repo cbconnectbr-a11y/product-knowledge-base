@@ -19,6 +19,7 @@ from lark_oapi.api.bitable.v1 import (
 from dotenv import load_dotenv
 
 from scripts.utils import get_supabase_client
+from scripts.extract_manual import extract_manual_content
 
 load_dotenv()
 
@@ -201,6 +202,16 @@ def process_record(record, fields_info):
         fields_info.get("3D模型", "Url")
     )
 
+    # 提取说明书内容 (Phase 2)
+    manual_content = ''
+    if manual_files and isinstance(manual_files, dict):
+        try:
+            manual_content = extract_manual_content(manual_files, client)
+            if manual_content:
+                logger.info(f"Extracted manual content for {sku}: {len(manual_content)} chars")
+        except Exception as e:
+            logger.error(f"Failed to extract manual for {sku}: {e}")
+
     # 如果中文名称为空，使用英文名称作为后备
     if not name_cn:
         name_cn = name_en
@@ -212,6 +223,7 @@ def process_record(record, fields_info):
         f"英文名称: {name_en}" if name_en else "",
         f"产品特性: {features}" if features else "",
         f"商品备注: {description}" if description else "",
+        f"说明书内容: {manual_content}" if manual_content else "",  # Phase 2: 添加说明书内容
     ]
 
     # 添加所有其他文本字段到可搜索内容
@@ -248,6 +260,7 @@ def process_record(record, fields_info):
         "images": images,
         "package_images": [img.get('url') for img in package_images] if package_images else [],
         "manual_files": manual_files,
+        "manual_content": manual_content,  # Phase 2: 说明书文本内容
         "model_3d_url": model_3d_url if isinstance(model_3d_url, str) else None,
         "feishu_raw_data": raw_data,  # 保存完整原始数据
         "feishu_record_id": record.record_id,
