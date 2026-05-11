@@ -113,20 +113,62 @@ def download_feishu_file(file_url: str, lark_client: lark.Client) -> bytes:
         raise ValueError(f"Cannot extract file_token from URL: {file_url}")
 
     file_token = match.group(1)
+    logger.info(f"Extracted file_token: {file_token}")
 
     try:
         request = DownloadMediaRequest.builder() \
             .file_token(file_token) \
             .build()
 
+        logger.info(f"Calling API: /open-apis/drive/v1/medias/{file_token}/download")
         response = lark_client.drive.v1.media.download(request)
 
+        # 详细诊断信息
+        logger.info(f"Response type: {type(response)}")
+        logger.info(f"Response attributes: {dir(response)}")
+        logger.info(f"Response success: {response.success()}")
+        logger.info(f"Response code: {response.code}")
+        logger.info(f"Response msg: {response.msg}")
+        logger.info(f"Response error: {response.error}")
+
+        # 检查原始响应
+        if hasattr(response, 'raw') and response.raw:
+            logger.info(f"Raw response type: {type(response.raw)}")
+            logger.info(f"Raw response attributes: {dir(response.raw)}")
+            if hasattr(response.raw, 'status_code'):
+                logger.info(f"HTTP Status: {response.raw.status_code}")
+            if hasattr(response.raw, 'content'):
+                logger.info(f"Response body size: {len(response.raw.content)} bytes")
+                if len(response.raw.content) < 1000:
+                    logger.info(f"Response body preview: {response.raw.content[:500]}")
+            if hasattr(response.raw, 'headers'):
+                logger.info(f"Response headers: {dict(response.raw.headers)}")
+
+        # 尝试读取响应体
+        logger.info(f"response.file value: {response.file}")
+        logger.info(f"response.file type: {type(response.file)}")
+
+        if response.file is not None:
+            try:
+                content = response.file.read()
+                logger.info(f"Successfully read file: {len(content)} bytes")
+                if len(content) == 0:
+                    logger.warning("Response body is empty (0 bytes)")
+            except Exception as read_error:
+                logger.error(f"Failed to read response body: {read_error}")
+                content = b''
+        else:
+            logger.error("response.file is None")
+            content = b''
+
         if not response.success():
-            raise Exception(f"Download failed: {response.code} - {response.msg}")
+            error_detail = f"code={response.code}, msg={response.msg}, error={response.error}"
+            raise Exception(f"Download failed: {error_detail}")
 
-        content = response.file.read()
+        if len(content) == 0:
+            raise Exception("Downloaded 0 bytes - empty file or permission denied")
+
         logger.info(f"Downloaded file: {len(content)} bytes")
-
         return content
 
     except Exception as e:
