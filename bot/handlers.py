@@ -10,6 +10,7 @@ from bot.formatters import (
     format_help_message,
     format_error_message
 )
+from bot.rag import generate_answer, format_rag_response
 from scripts.utils import get_supabase_client
 
 # 配置日志
@@ -123,8 +124,24 @@ def handle_message(message_text: str, user_id: Optional[str] = None) -> str:
                 result_count=len(results)
             )
 
-            # 格式化并返回结果
-            return format_search_results(results, search_type, query)
+            # 如果有搜索结果，使用 RAG 生成智能回答
+            if results:
+                try:
+                    answer = generate_answer(argument, results)
+                    if answer:
+                        # 使用 RAG 回答
+                        return format_rag_response(argument, answer, results)
+                    else:
+                        # RAG 失败，降级为传统搜索结果
+                        logger.warning("RAG generation failed, falling back to traditional search")
+                        return format_search_results(results, search_type, query)
+                except Exception as e:
+                    # RAG 出错，降级为传统搜索结果
+                    logger.error(f"RAG error, falling back: {e}", exc_info=True)
+                    return format_search_results(results, search_type, query)
+            else:
+                # 没有搜索结果
+                return format_search_results(results, search_type, query)
 
         else:
             # 理论上不会到达这里
