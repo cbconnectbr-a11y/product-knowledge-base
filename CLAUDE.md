@@ -7,8 +7,11 @@
 **核心功能:**
 - 📥 自动监听飞书文件上传，导入多客客服对话数据
 - 🔍 支持 SKU 和关键词搜索
-- 🤖 基于 GPT-4o 的 RAG 智能问答
+- 🤖 基于 DeepSeek/GPT-4o 的 RAG 智能问答
+- 💬 智能追问与对话上下文管理（记忆最近3轮对话）
+- 🌐 多语言自动切换（中文/葡萄牙语）
 - 📋 批量文件导入队列系统
+- 🎯 AI建议答案审核机制
 
 ## 系统架构
 
@@ -29,10 +32,16 @@ Supabase 数据库 (knowledge_entries)
 
 ### 核心模块
 - `bot/main.py` - 飞书 Webhook 服务 (Port 5001)
+- `bot/handlers.py` - 消息处理、RAG 搜索、追问识别
+- `bot/rag.py` - RAG 智能问答（DeepSeek/GPT-4o）
+- `bot/session_manager.py` - 对话上下文管理 ⭐
+- `bot/ai_suggestion.py` - AI建议答案生成
+- `bot/card_messages.py` - 飞书交互卡片
+- `bot/card_handler.py` - 卡片回调处理
 - `bot/file_handler.py` - 文件监听和下载
 - `bot/queue_manager.py` - 导入队列管理
-- `bot/handlers.py` - 消息处理和 RAG 搜索
 - `scripts/import_duoke_daily.py` - 数据导入脚本
+- `scripts/utils.py` - 工具函数（SKU提取、语言检测）
 
 ### 配置文件
 - `.env` - 环境变量 (飞书/Supabase/OpenAI 密钥)
@@ -280,6 +289,7 @@ queue.clear_completed()
 
 ## 文档资源
 
+- 📖 [对话上下文与追问功能](docs/conversation-context-feature.md) ⭐ NEW
 - 📖 [自动导入系统](docs/auto-import-setup.md)
 - 📖 [队列系统详解](docs/queue-system.md)
 - 📖 [系统状态总览](docs/system-status-2026-04-30.md)
