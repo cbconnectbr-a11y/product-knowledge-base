@@ -213,13 +213,14 @@ WEAK_FOLLOWUP_KEYWORDS = [
 ]
 
 
-def is_followup_question(question: str, has_context: bool) -> bool:
+def is_followup_question(question: str, has_context: bool, last_context: Optional[Dict[str, Any]] = None) -> bool:
     """
     判断是否为追问
 
     Args:
         question: 用户问题
         has_context: 是否有上下文
+        last_context: 上一轮对话内容（可选）
 
     Returns:
         是否为追问
@@ -232,20 +233,36 @@ def is_followup_question(question: str, has_context: bool) -> bool:
 
     # 导入SKU提取工具
     from scripts.utils import extract_sku
-    has_sku = bool(extract_sku(question))
+    current_sku = extract_sku(question)
+
+    # 提取上次对话的SKU
+    last_sku = None
+    if last_context:
+        last_question = last_context.get('question', '')
+        last_sku = extract_sku(last_question)
 
     # 1. 强追问关键词 → 总是追问（即使有SKU）
     for keyword in STRONG_FOLLOWUP_KEYWORDS:
         if keyword in clean_question:
             return True
 
-    # 2. 弱追问关键词 → 只有在没有新SKU时才算追问
+    # 2. 如果当前问题有SKU
+    if current_sku:
+        # 2a. 如果SKU与上次相同 → 是追问（询问同一个SKU的不同属性）
+        if current_sku == last_sku:
+            return True
+        # 2b. 如果SKU与上次不同 → 不是追问（新的SKU查询）
+        else:
+            return False
+
+    # 3. 没有SKU的情况
+    # 3a. 弱追问关键词 → 追问
     for keyword in WEAK_FOLLOWUP_KEYWORDS:
-        if keyword in clean_question and not has_sku:
+        if keyword in clean_question:
             return True
 
-    # 3. 短问题（少于15个字符）且没有SKU → 可能是追问
-    if len(clean_question) < 15 and not has_sku:
+    # 3b. 短问题（少于15个字符）→ 可能是追问
+    if len(clean_question) < 15:
         return True
 
     return False

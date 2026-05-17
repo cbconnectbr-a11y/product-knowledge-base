@@ -138,7 +138,7 @@ def handle_message(message_text: str, user_id: Optional[str] = None, chat_id: Op
                     # 检查是否为追问（需要上下文）
                     session_manager = get_session_manager()
                     last_context = session_manager.get_last_context(user_id or 'unknown', chat_id or 'default')
-                    is_followup = is_followup_question(argument, has_context=bool(last_context))
+                    is_followup = is_followup_question(argument, has_context=bool(last_context), last_context=last_context)
 
                     # 如果是追问，获取上下文文本
                     context_text = None
