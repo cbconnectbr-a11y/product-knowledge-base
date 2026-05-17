@@ -11,6 +11,12 @@ from bot.formatters import (
     format_error_message
 )
 from bot.rag import generate_answer, format_rag_response
+from bot.ai_suggestion import (
+    check_if_rejected_before,
+    generate_ai_suggestion
+)
+from bot.card_messages import build_ai_suggestion_card, send_interactive_card
+from bot.session_manager import get_session_manager, is_followup_question
 from scripts.utils import get_supabase_client
 
 # 配置日志
@@ -76,13 +82,15 @@ def parse_command(text: str) -> Tuple[str, str]:
         return ('search', text)
 
 
-def handle_message(message_text: str, user_id: Optional[str] = None) -> str:
+def handle_message(message_text: str, user_id: Optional[str] = None, chat_id: Optional[str] = None, lark_client=None) -> str:
     """
     主处理函数，协调命令解析和搜索
 
     Args:
         message_text: 用户消息文本
         user_id: 飞书用户 ID（可选，用于记录日志）
+        chat_id: 飞书群聊ID（可选，用于发送卡片消息）
+        lark_client: 飞书客户端（可选，用于发送卡片消息）
 
     Returns:
         格式化后的回复消息
@@ -127,8 +135,30 @@ def handle_message(message_text: str, user_id: Optional[str] = None) -> str:
             # 如果有搜索结果，使用 RAG 生成智能回答
             if results:
                 try:
-                    answer = generate_answer(argument, results)
+                    # 检查是否为追问（需要上下文）
+                    session_manager = get_session_manager()
+                    last_context = session_manager.get_last_context(user_id or 'unknown', chat_id or 'default')
+                    is_followup = is_followup_question(argument, has_context=bool(last_context))
+
+                    # 如果是追问，获取上下文文本
+                    context_text = None
+                    if is_followup and last_context:
+                        context_text = session_manager.get_context_text(user_id or 'unknown', chat_id or 'default', include_last=True)
+                        logger.info(f"Follow-up question detected, using context: {len(context_text)} chars")
+
+                    # 生成答案（传入上下文）
+                    answer = generate_answer(argument, results, conversation_context=context_text)
+
                     if answer:
+                        # 保存对话到会话中
+                        session_manager.add_conversation(
+                            user_id=user_id or 'unknown',
+                            chat_id=chat_id or 'default',
+                            question=argument,
+                            answer=answer,
+                            search_results=results
+                        )
+
                         # 使用 RAG 回答
                         return format_rag_response(argument, answer, results)
                     else:
@@ -140,8 +170,8 @@ def handle_message(message_text: str, user_id: Optional[str] = None) -> str:
                     logger.error(f"RAG error, falling back: {e}", exc_info=True)
                     return format_search_results(results, search_type, query)
             else:
-                # 没有搜索结果
-                return format_search_results(results, search_type, query)
+                # 没有搜索结果 - 触发AI建议功能
+                return handle_no_results(argument, user_id, chat_id, lark_client)
 
         else:
             # 理论上不会到达这里
@@ -150,6 +180,72 @@ def handle_message(message_text: str, user_id: Optional[str] = None) -> str:
     except Exception as e:
         logger.error(f"Error handling message: {e}", exc_info=True)
         return format_error_message('general', str(e))
+
+
+def handle_no_results(
+    query: str,
+    user_id: Optional[str],
+    chat_id: Optional[str],
+    lark_client
+) -> str:
+    """
+    处理搜索无结果的情况：尝试生成AI建议
+
+    Args:
+        query: 搜索查询
+        user_id: 飞书用户ID
+        chat_id: 飞书群聊ID
+        lark_client: 飞书客户端
+
+    Returns:
+        回复消息文本
+    """
+    try:
+        # 1. 检查该问题是否之前被拒绝过
+        rejected = check_if_rejected_before(query)
+        if rejected:
+            logger.info(f"Question was rejected before, skipping AI suggestion")
+            return format_error_message(
+                'general',
+                f'未找到相关知识\n\n💡 该问题之前曾尝试AI建议但被标记为不准确，建议人工回复或等待知识库补充。'
+            )
+
+        # 2. 如果没有chat_id或lark_client，无法发送卡片，直接返回无结果消息
+        if not chat_id or not lark_client:
+            logger.warning("Cannot send AI suggestion card: missing chat_id or lark_client")
+            return format_search_results([], 'keyword', query)
+
+        # 3. 生成AI建议
+        logger.info(f"Generating AI suggestion for: {query[:50]}...")
+        ai_result = generate_ai_suggestion(query, user_id=user_id, chat_id=chat_id)
+
+        if not ai_result:
+            logger.error("Failed to generate AI suggestion")
+            return format_search_results([], 'keyword', query)
+
+        # 4. 构建交互式卡片
+        card = build_ai_suggestion_card(
+            question=query,
+            ai_answer=ai_result['answer'],
+            log_id=ai_result['log_id'],
+            model=ai_result['model'],
+            latency_ms=ai_result['latency_ms']
+        )
+
+        # 5. 发送卡片消息
+        success = send_interactive_card(lark_client, chat_id, card)
+
+        if success:
+            logger.info(f"AI suggestion card sent successfully for query: {query[:50]}...")
+            # 返回简单提示（实际答案在卡片里）
+            return "💡 知识库暂无答案，已生成AI建议供您审核（请查看上方卡片消息）"
+        else:
+            logger.error("Failed to send AI suggestion card")
+            return format_search_results([], 'keyword', query)
+
+    except Exception as e:
+        logger.error(f"Error in handle_no_results: {e}", exc_info=True)
+        return format_search_results([], 'keyword', query)
 
 
 def log_search(
