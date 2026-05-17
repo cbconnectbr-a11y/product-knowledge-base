@@ -290,7 +290,8 @@ queue.clear_completed()
 ## 文档资源
 
 - 📖 [对话上下文与追问功能](docs/conversation-context-feature.md) ⭐ NEW
-- 📖 [自动导入系统](docs/auto-import-setup.md)
+- 📖 [飞书Webhook配置指南](docs/feishu-webhook-config-guide.md) ⭐ NEW
+- 📖 [自动导入系统](docs/auto-import-setup.md) ✅ 已验证
 - 📖 [队列系统详解](docs/queue-system.md)
 - 📖 [系统状态总览](docs/system-status-2026-04-30.md)
 - 📖 [Phase 2 规划](docs/phase2-manual-content-extraction.md)
