@@ -118,11 +118,28 @@ def handle_message(message_text: str, user_id: Optional[str] = None, chat_id: Op
                     f'命令 /{command} 需要提供参数\n使用 /help 查看帮助'
                 )
 
+            # 检查是否为追问，如果是则补充上次的SKU
+            session_manager = get_session_manager()
+            last_context = session_manager.get_last_context(user_id or 'unknown', chat_id or 'default')
+            is_followup = is_followup_question(argument, has_context=bool(last_context), last_context=last_context)
+
+            # 如果是追问，尝试从上次对话中提取SKU并补充到查询中
+            enhanced_query = argument
+            if is_followup and last_context:
+                from scripts.utils import extract_sku
+                last_sku = extract_sku(last_context.get('question', ''))
+                current_sku = extract_sku(argument)
+
+                # 如果上次有SKU，当前没有SKU，自动补充
+                if last_sku and not current_sku:
+                    enhanced_query = f"{last_sku} {argument}"
+                    logger.info(f"Follow-up detected, enhanced query: '{argument}' -> '{enhanced_query}'")
+
             # 执行搜索
-            search_result = smart_search(argument)
+            search_result = smart_search(enhanced_query)
             results = search_result.get('results', [])
             search_type = search_result.get('search_type', 'keyword')
-            query = search_result.get('query', argument)
+            query = search_result.get('query', enhanced_query)
 
             # 记录搜索日志
             log_search(
@@ -135,11 +152,6 @@ def handle_message(message_text: str, user_id: Optional[str] = None, chat_id: Op
             # 如果有搜索结果，使用 RAG 生成智能回答
             if results:
                 try:
-                    # 检查是否为追问（需要上下文）
-                    session_manager = get_session_manager()
-                    last_context = session_manager.get_last_context(user_id or 'unknown', chat_id or 'default')
-                    is_followup = is_followup_question(argument, has_context=bool(last_context), last_context=last_context)
-
                     # 如果是追问，获取上下文文本
                     context_text = None
                     if is_followup and last_context:
