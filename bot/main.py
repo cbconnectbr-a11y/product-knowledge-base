@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 import time
+from pathlib import Path
 from flask import Flask, request, jsonify
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
@@ -22,6 +23,10 @@ from bot.config import (
 from bot.handlers import handle_message
 from bot.file_handler import handle_file_message
 from bot.queue_manager import get_queue_processor
+from bot.card_handler import handle_card_callback
+
+# 项目根目录
+PROJECT_ROOT = Path(__file__).parent.parent
 
 # 配置日志
 logging.basicConfig(
@@ -137,6 +142,64 @@ def webhook():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/card_callback', methods=['POST'])
+def card_callback():
+    """
+    飞书卡片回调端点
+
+    处理AI建议答案卡片的用户操作（approve/reject/ignore）
+    """
+    try:
+        # 获取请求数据
+        data = request.get_json()
+
+        if not data:
+            logger.warning("Received empty card callback request")
+            return jsonify({'error': 'Empty request body'}), 400
+
+        # 处理加密事件
+        if 'encrypt' in data and FEISHU_ENCRYPT_KEY:
+            cipher = AESCipher(FEISHU_ENCRYPT_KEY)
+            decrypted = cipher.decrypt_str(data['encrypt'])
+            data = json.loads(decrypted)
+            logger.info("Decrypted card callback received")
+
+        logger.info(f"Received card callback: type={data.get('type')}")
+
+        # 1. 处理 URL 验证事件（飞书配置回调URL时的验证）
+        if data.get('type') == 'url_verification':
+            challenge = data.get('challenge', '')
+            logger.info(f"Card callback URL verification challenge: {challenge}")
+            return jsonify({'challenge': challenge}), 200
+
+        # 验证 Token
+        token = data.get('token') or data.get('header', {}).get('token')
+        if FEISHU_VERIFICATION_TOKEN and token != FEISHU_VERIFICATION_TOKEN:
+            logger.warning("Invalid verification token in card callback")
+            return jsonify({'error': 'Invalid token'}), 403
+
+        # 提取用户ID
+        user_id = (data.get('event', {}).get('operator', {}).get('user_id') or
+                   data.get('event', {}).get('operator', {}).get('open_id'))
+
+        # 处理卡片回调
+        response_data = handle_card_callback(data.get('event', {}), user_id=user_id)
+
+        logger.info(f"Card callback processed successfully")
+
+        # 尝试不同的响应方式解决200341错误
+        from flask import Response
+        return Response(
+            response=json.dumps(response_data),
+            status=200,
+            mimetype='application/json; charset=utf-8'
+        )
+
+    except Exception as e:
+        logger.error(f"Error processing card callback: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 def process_message_async(receive_id: str, receive_id_type: str, message_text: str, message_id: str, user_id: str = None):
     """
     异步处理消息（在后台线程中运行）
@@ -149,8 +212,17 @@ def process_message_async(receive_id: str, receive_id_type: str, message_text: s
         user_id: 发送者用户 ID（用于日志记录）
     """
     try:
-        # 处理消息（使用实际发送者 ID 用于日志）
-        response_text = handle_message(message_text, user_id=user_id or receive_id)
+        # 获取飞书客户端
+        client = get_lark_client()
+
+        # 处理消息（传入chat_id和client以支持AI建议卡片）
+        chat_id = receive_id if receive_id_type == 'chat_id' else None
+        response_text = handle_message(
+            message_text,
+            user_id=user_id or receive_id,
+            chat_id=chat_id,
+            lark_client=client
+        )
 
         # 发送回复
         send_reply(receive_id, receive_id_type, response_text)
@@ -203,18 +275,41 @@ def handle_message_event(event_data: dict) -> tuple:
         message = event.get('message', {})
         sender = event.get('sender', {})
 
-        # 忽略机器人自己发送的消息（防止循环）
-        sender_type = sender.get('sender_type')
-        if sender_type == 'app' or sender_type == 'bot':
-            logger.info(f"Ignored message from bot/app (sender_type: {sender_type})")
-            return jsonify({'msg': 'ok'}), 200
-
-        # 提取消息信息
+        # 提取消息信息（提前提取，用于文件检查）
         message_id = message.get('message_id')
         message_type = message.get('message_type')
         content_str = message.get('content', '{}')
         chat_type = message.get('chat_type', 'p2p')  # p2p 或 group
         chat_id = message.get('chat_id')
+        sender_type = sender.get('sender_type')
+
+        # 特殊处理：机器人发送的汇总文件记录到pending list
+        if (sender_type == 'app' or sender_type == 'bot') and message_type == 'file':
+            try:
+                from bot.file_handler import is_duoke_summary_file
+                import sys
+                sys.path.insert(0, str(PROJECT_ROOT))
+                from scripts.scan_feishu_files import add_pending_file
+
+                content_json = json.loads(content_str)
+                file_name = content_json.get('file_name', '')
+                file_key = content_json.get('file_key')
+
+                if is_duoke_summary_file(file_name):
+                    add_pending_file(message_id, file_key, file_name, chat_id)
+                    logger.info(f"Bot file added to pending list: {file_name}")
+                else:
+                    logger.info(f"Ignored non-summary file from bot: {file_name}")
+
+            except Exception as e:
+                logger.error(f"Error handling bot file: {e}", exc_info=True)
+
+            return jsonify({'msg': 'ok'}), 200
+
+        # 忽略其他机器人消息（防止循环）
+        if sender_type == 'app' or sender_type == 'bot':
+            logger.info(f"Ignored message from bot/app (sender_type: {sender_type})")
+            return jsonify({'msg': 'ok'}), 200
 
         # 确定回复目标：群聊回复到群，私聊回复给发送者
         if chat_type == 'group' and chat_id:
