@@ -26,6 +26,9 @@ FEISHU_PRODUCT_TABLE_TABLE_ID = os.environ.get("FEISHU_PRODUCT_TABLE_TABLE_ID")
 # 技术支持群
 FEISHU_TECH_GROUPS = [g.strip() for g in os.environ.get("FEISHU_TECH_GROUP_IDS", "").split(",") if g.strip()]
 
+# 禁止回复的群（黑名单）
+FEISHU_NO_REPLY_GROUPS = [g.strip() for g in os.environ.get("FEISHU_NO_REPLY_GROUPS", "").split(",") if g.strip()]
+
 # 日志配置
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 LOG_FILE = os.environ.get("LOG_FILE", "logs/app.log")

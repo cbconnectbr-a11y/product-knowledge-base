@@ -18,6 +18,7 @@ from bot.config import (
     FEISHU_APP_SECRET,
     FEISHU_VERIFICATION_TOKEN,
     FEISHU_ENCRYPT_KEY,
+    FEISHU_NO_REPLY_GROUPS,
     validate_config
 )
 from bot.handlers import handle_message
@@ -369,12 +370,45 @@ def handle_message_event(event_data: dict) -> tuple:
                 logger.error(f"Failed to parse file content: {content_str}")
                 return jsonify({'msg': 'ok'}), 200
 
-        # 处理文本消息
-        if message_type == 'text':
+        # 处理文本消息和富文本消息（@提及）
+        if message_type in ('text', 'post'):
+            # 检查是否在禁止回复的群里
+            if chat_type == 'group' and chat_id in FEISHU_NO_REPLY_GROUPS:
+                logger.info(f"Ignored message from blacklisted group: {chat_id}")
+                return jsonify({'msg': 'ok'}), 200
+
             # 解析消息内容
             try:
                 content_json = json.loads(content_str)
-                message_text = content_json.get('text', '').strip()
+
+                # text类型：直接提取文本
+                if message_type == 'text':
+                    message_text = content_json.get('text', '').strip()
+
+                # post类型：从富文本中提取文本
+                elif message_type == 'post':
+                    # 直接获取content（飞书的post消息可能直接在顶层，也可能嵌套在post.zh_cn里）
+                    if 'content' in content_json:
+                        # 直接在顶层
+                        content_blocks = content_json.get('content', [])
+                    else:
+                        # 嵌套在post.zh_cn里
+                        post_content = content_json.get('post', {})
+                        lang_content = post_content.get('zh_cn') or post_content.get('en_us') or {}
+                        content_blocks = lang_content.get('content', [])
+
+                    # 遍历所有段落和元素
+                    text_parts = []
+                    for paragraph in content_blocks:
+                        for element in paragraph:
+                            if element.get('tag') == 'text':
+                                text_parts.append(element.get('text', ''))
+                            elif element.get('tag') == 'a':
+                                # 链接文本
+                                text_parts.append(element.get('text', ''))
+
+                    message_text = ' '.join(text_parts).strip()
+
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse message content: {content_str}")
                 return jsonify({'msg': 'ok'}), 200
@@ -383,7 +417,7 @@ def handle_message_event(event_data: dict) -> tuple:
                 logger.info("Received empty message")
                 return jsonify({'msg': 'ok'}), 200
 
-            logger.info(f"Received message: {message_text}")
+            logger.info(f"Received {message_type} message: {message_text}")
 
             # 异步处理文本消息（立即返回 200）
             thread = threading.Thread(
