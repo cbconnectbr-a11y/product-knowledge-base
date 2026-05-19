@@ -332,6 +332,8 @@ def filter_sensitive_content(results: List[Dict[str, Any]]) -> List[Dict[str, An
     """
     过滤包含敏感信息的记录（价格、供应商等）
 
+    注意：只过滤客服对话等知识条目，不过滤产品信息（产品规格不是敏感信息）
+
     Args:
         results: 搜索结果列表
 
@@ -353,7 +355,15 @@ def filter_sensitive_content(results: List[Dict[str, Any]]) -> List[Dict[str, An
     filtered_count = 0
 
     for result in results:
-        # 检查标题和内容
+        source_type = result.get('source_type', '')
+        source_group = result.get('source_group', '')
+
+        # 产品信息不过滤（产品规格、技术参数不是敏感信息）
+        if source_type == 'product' or source_group == '产品信息':
+            filtered_results.append(result)
+            continue
+
+        # 只过滤知识库条目（客服对话等）
         title = result.get('title', '').lower()
         content = result.get('content', '').lower()
         combined_text = title + ' ' + content

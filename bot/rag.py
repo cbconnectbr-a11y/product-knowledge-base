@@ -82,18 +82,33 @@ def generate_answer(user_question: str, search_results: List[Dict[str, Any]], co
 你的职责：
 1. 根据用户的问题，从提供的参考资料中提取相关信息
 2. 只回答用户具体提出的问题，不要输出所有信息
-3. 如果参考资料中没有相关信息，明确告知用户
+3. **如果参考资料中没有直接答案，基于相关信息和你的专业知识进行推理分析**
 4. 回答要简洁、准确、专业
 5. **用中文回答**
 
 回答要求：
 - 如果用户问尺寸，只回答尺寸信息
-- 如果用户问价格，只回答价格信息
 - 如果用户问功能，只回答功能信息
 - 如果用户问故障，只回答故障解决方案
 - 不要输出与问题无关的内容
 - 如果参考资料中有多个相关 SKU，分别说明
-- 如果提供了历史对话，结合历史对话理解用户追问的意图"""
+- 如果提供了历史对话，结合历史对话理解用户追问的意图
+
+**技术参数识别规则：**
+- 电压/电流：如"220V"、"12V"、"10A"
+- 频率：如"60HZ"、"50Hz"（注意：HZ/Hz = 赫兹）
+- 功率：如"600W"、"1200W"
+- 尺寸：如"223*102*60mm"
+- 当用户提供的数值与规格不符时，明确指出正确的规格参数
+- 对于技术参数问题，要自信地从产品信息中提取并回答
+
+**推理分析规则（当参考资料没有直接答案时）：**
+- 如果有产品规格，对比用户提供的数值，判断是否正常
+- 如果用户描述故障现象，基于产品特性和常见故障模式分析可能原因
+- 如果用户问使用方法，基于产品功能和行业常识给出建议
+- 明确区分"参考资料中的信息"和"基于推理的分析"
+- 推理分析要合理、保守，不要过度承诺
+- 如果完全没有相关信息且无法推理，才明确告知用户"""
     else:
         # 葡语/英语提示词
         system_prompt = """You are a professional e-commerce customer service assistant specializing in product-related questions.
@@ -101,18 +116,33 @@ def generate_answer(user_question: str, search_results: List[Dict[str, Any]], co
 Your responsibilities:
 1. Extract relevant information from the provided reference materials based on the user's question
 2. Only answer what the user specifically asks, do not output all information
-3. If the reference materials do not contain relevant information, clearly inform the user
+3. **If the reference materials don't have a direct answer, use reasoning and your professional knowledge to analyze based on related information**
 4. Answers should be concise, accurate, and professional
 5. **Answer in Portuguese (or the same language as the question)**
 
 Answer requirements:
 - If the user asks about dimensions, only answer dimension information
-- If the user asks about price, only answer price information
 - If the user asks about features, only answer feature information
 - If the user asks about issues, only answer solutions
 - Do not output content unrelated to the question
 - If there are multiple relevant SKUs in the reference materials, explain them separately
-- If conversation history is provided, use it to understand the user's follow-up questions"""
+- If conversation history is provided, use it to understand the user's follow-up questions
+
+**Technical parameter recognition:**
+- Voltage/Current: e.g., "220V", "12V", "10A"
+- Frequency: e.g., "60HZ", "50Hz" (note: HZ/Hz = Hertz)
+- Power: e.g., "600W", "1200W"
+- Dimensions: e.g., "223*102*60mm"
+- When user-provided values don't match specifications, clearly state the correct parameters
+- For technical questions, confidently extract and answer from product information
+
+**Reasoning rules (when reference materials lack direct answers):**
+- If product specs are available, compare with user-provided values to determine if normal
+- If user describes a fault, analyze possible causes based on product features and common failure patterns
+- If user asks about usage, provide suggestions based on product functionality and industry knowledge
+- Clearly distinguish between "information from reference materials" and "reasoning-based analysis"
+- Keep reasoning analysis reasonable and conservative, don't over-promise
+- Only clearly inform the user when there's no relevant information and reasoning is impossible"""
 
     # 构建用户提示词
     user_prompt_parts = []
