@@ -141,13 +141,14 @@ def handle_message(message_text: str, user_id: Optional[str] = None, chat_id: Op
             search_type = search_result.get('search_type', 'keyword')
             query = search_result.get('query', enhanced_query)
 
-            # 记录搜索日志
-            log_search(
-                user_id=user_id,
-                query=query,
-                search_type=search_type,
-                result_count=len(results)
+            # 异步记录搜索日志（不阻塞主流程）
+            import threading
+            log_thread = threading.Thread(
+                target=log_search,
+                args=(user_id, query, search_type, len(results)),
+                daemon=True
             )
+            log_thread.start()
 
             # 如果有搜索结果，使用 RAG 生成智能回答
             if results:
