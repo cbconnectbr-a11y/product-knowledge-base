@@ -73,3 +73,9 @@ data/duoke/*.xlsx
 data/duoke/archive/*.xlsx
 data/duoke/import_queue.json
 .env.backup
+
+# Backups and temporary files
+backups/
+failed_files.txt
+*.backup
+*.bak

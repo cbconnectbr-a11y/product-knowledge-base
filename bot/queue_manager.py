@@ -181,6 +181,9 @@ class QueueProcessor:
         self.running = False
         self.thread = None
         self.python_path = '/opt/homebrew/bin/python3.13'
+        # 追踪活跃的导入进程日志文件
+        self.log_files = {}  # {pid: file_handle}
+        self.log_paths = {}  # {pid: Path}
 
     def start(self):
         """启动队列处理器"""
@@ -214,6 +217,37 @@ class QueueProcessor:
             logger.error(f"Failed to check import process: {e}")
             return False
 
+    def _cleanup_finished_processes(self):
+        """清理已完成进程的日志文件句柄"""
+        import os
+        import signal
+
+        finished_pids = []
+
+        for pid in list(self.log_files.keys()):
+            try:
+                # 检查进程是否还存在
+                os.kill(pid, 0)  # signal 0 只检查，不真的发信号
+            except OSError:
+                # 进程不存在了，关闭日志文件
+                finished_pids.append(pid)
+
+                log_file = self.log_files[pid]
+                log_path = self.log_paths.get(pid)
+
+                try:
+                    log_file.close()
+                    logger.info(f"Closed log file for finished process {pid}: {log_path}")
+                except Exception as e:
+                    logger.error(f"Error closing log file for PID {pid}: {e}")
+
+                # 从字典中移除
+                del self.log_files[pid]
+                if pid in self.log_paths:
+                    del self.log_paths[pid]
+
+        return finished_pids
+
     def _start_import(self, filepath: str) -> Optional[int]:
         """
         启动导入脚本
@@ -224,15 +258,30 @@ class QueueProcessor:
         try:
             logger.info(f"Starting import for: {filepath}")
 
+            # 准备日志文件
+            log_dir = PROJECT_ROOT / 'logs' / 'queue'
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            filename = Path(filepath).stem  # 不带扩展名
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            log_path = log_dir / f"import_{filename}_{timestamp}.log"
+
+            # 打开日志文件（二进制模式，避免编码问题）
+            log_file = open(log_path, 'wb')
+
+            # 启动子进程，stdout/stderr 重定向到文件
             process = subprocess.Popen(
                 [self.python_path, str(IMPORT_SCRIPT)],
                 cwd=str(PROJECT_ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
+                stdout=log_file,              # ← 重定向到文件，不再用PIPE
+                stderr=subprocess.STDOUT,     # ← stderr合并到stdout
             )
 
-            logger.info(f"Import process started with PID: {process.pid}")
+            # 保存日志文件句柄和路径，稍后关闭
+            self.log_files[process.pid] = log_file
+            self.log_paths[process.pid] = log_path
+
+            logger.info(f"Import process started with PID: {process.pid}, log: {log_path}")
             return process.pid
 
         except Exception as e:
@@ -245,6 +294,9 @@ class QueueProcessor:
 
         while self.running:
             try:
+                # 清理已完成进程的日志文件句柄
+                self._cleanup_finished_processes()
+
                 # 检查是否有导入进程在运行
                 if self._is_import_running():
                     # 有进程在运行，等待

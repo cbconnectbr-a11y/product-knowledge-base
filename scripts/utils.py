@@ -22,6 +22,7 @@ def get_supabase_client() -> Client:
 SKU_PATTERNS = [
     r'([A-Z]{1,4}\d{3,4}[-_]\d{3,4})',  # CBC004-1234, K004-5678
     r'([A-Z]{4}\d{4})',                  # BRME0341
+    r'([A-Z]{4}[-_]\d{3})',             # ANKI-001 (4字母-3数字)
     r'([A-Z]\d{3}[-_]\d{3})',           # K004-123
     r'([A-Z]{3}\d{3})',                 # YMX018, SUB154
 ]
@@ -76,6 +77,32 @@ def is_tech_question(text: str) -> bool:
             return True
 
     return False
+
+
+def detect_language(text: str) -> str:
+    """
+    检测文本语言（简单启发式方法）
+
+    Args:
+        text: 输入文本
+
+    Returns:
+        'zh' (中文) 或 'pt' (葡萄牙语/其他)
+    """
+    # 检查是否包含中文字符
+    chinese_chars = 0
+
+    for char in text:
+        # Unicode 中文字符范围（汉字）
+        if '一' <= char <= '鿿':
+            chinese_chars += 1
+
+    # 只要包含2个或以上中文字符，就认为是中文
+    # 这样即使是 "ANKI-001 说明书" 也能正确识别
+    if chinese_chars >= 2:
+        return 'zh'
+    else:
+        return 'pt'  # 默认葡语（或其他语言）
 
 def extract_keywords(text: str, max_keywords: int = 5) -> List[str]:
     """
