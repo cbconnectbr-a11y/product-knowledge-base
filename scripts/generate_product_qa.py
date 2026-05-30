@@ -437,7 +437,8 @@ def main():
     parser.add_argument("--max-history", type=int, default=50, help="最多读取多少条历史记录")
     parser.add_argument("--ml-file", default="", help="预抓取的产品页面 markdown 文件路径（可选）")
     parser.add_argument("--no-verify", action="store_true", help="跳过核查")
-    parser.add_argument("--no-supplement", action="store_true", help="跳过补充一轮")
+    parser.add_argument("--no-supplement", action="store_true", help="跳过补充轮")
+    parser.add_argument("--max-rounds", type=int, default=4, help="最多补充几轮（每轮挖未覆盖问题，新增<5则停）")
     parser.add_argument("--use-manual", action="store_true", help="提取并使用说明书正文（需飞书应用 drive 下载权限）")
     args = parser.parse_args()
 
@@ -460,12 +461,19 @@ def main():
     history = fetch_history(client, args.sku, args.max_history)
     logger.info(f"SKU={args.sku} | 历史 {len(history)} 条 | 页面={'有' if ml_content else '无'} | 说明书={'有' if product.get('_manual_content') else '无'}")
 
-    qa_list = generate_qa(args.sku, product, history, ml_content)
+    qa_list = dedupe(generate_qa(args.sku, product, history, ml_content))
     logger.info(f"[生成] {len(qa_list)} 条")
     if not args.no_supplement:
-        more = generate_more(args.sku, product, history, ml_content, [q.get("q_pt", "") for q in qa_list])
-        qa_list = dedupe(qa_list + more)
-        logger.info(f"[补充后] 合并去重 {len(qa_list)} 条")
+        # 多轮补充：循环挖未覆盖问题，直到一轮新增很少或达上限，避免条数受单次调用上限/上下文挤占影响
+        for rnd in range(1, args.max_rounds + 1):
+            covered = [q.get("q_pt", "") for q in qa_list]
+            more = generate_more(args.sku, product, history, ml_content, covered)
+            merged = dedupe(qa_list + more)
+            added = len(merged) - len(qa_list)
+            qa_list = merged
+            logger.info(f"[补充第{rnd}轮] 新增 {added} 条 → 共 {len(qa_list)} 条")
+            if added < 5:
+                break
 
     if not args.no_verify:
         qa_list = verify_qa(qa_list, product, history, ml_content)
