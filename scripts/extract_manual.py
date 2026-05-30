@@ -12,7 +12,7 @@ import logging
 from io import BytesIO
 from pathlib import Path
 import lark_oapi as lark
-from lark_oapi.api.drive.v1 import DownloadMediaRequest
+from lark_oapi.api.drive.v1 import DownloadMediaRequest, DownloadFileRequest
 import re
 
 logger = logging.getLogger(__name__)
@@ -115,65 +115,44 @@ def download_feishu_file(file_url: str, lark_client: lark.Client) -> bytes:
     file_token = match.group(1)
     logger.info(f"Extracted file_token: {file_token}")
 
-    try:
-        request = DownloadMediaRequest.builder() \
-            .file_token(file_token) \
-            .build()
-
-        logger.info(f"Calling API: /open-apis/drive/v1/medias/{file_token}/download")
-        response = lark_client.drive.v1.media.download(request)
-
-        # 详细诊断信息
-        logger.info(f"Response type: {type(response)}")
-        logger.info(f"Response attributes: {dir(response)}")
-        logger.info(f"Response success: {response.success()}")
-        logger.info(f"Response code: {response.code}")
-        logger.info(f"Response msg: {response.msg}")
-        logger.info(f"Response error: {response.error}")
-
-        # 检查原始响应
-        if hasattr(response, 'raw') and response.raw:
-            logger.info(f"Raw response type: {type(response.raw)}")
-            logger.info(f"Raw response attributes: {dir(response.raw)}")
-            if hasattr(response.raw, 'status_code'):
-                logger.info(f"HTTP Status: {response.raw.status_code}")
-            if hasattr(response.raw, 'content'):
-                logger.info(f"Response body size: {len(response.raw.content)} bytes")
-                if len(response.raw.content) < 1000:
-                    logger.info(f"Response body preview: {response.raw.content[:500]}")
-            if hasattr(response.raw, 'headers'):
-                logger.info(f"Response headers: {dict(response.raw.headers)}")
-
-        # 尝试读取响应体
-        logger.info(f"response.file value: {response.file}")
-        logger.info(f"response.file type: {type(response.file)}")
-
-        if response.file is not None:
-            try:
-                content = response.file.read()
-                logger.info(f"Successfully read file: {len(content)} bytes")
-                if len(content) == 0:
-                    logger.warning("Response body is empty (0 bytes)")
-            except Exception as read_error:
-                logger.error(f"Failed to read response body: {read_error}")
-                content = b''
-        else:
-            logger.error("response.file is None")
-            content = b''
-
+    def _read(response) -> bytes:
         if not response.success():
-            error_detail = f"code={response.code}, msg={response.msg}, error={response.error}"
-            raise Exception(f"Download failed: {error_detail}")
+            return b''
+        f = getattr(response, "file", None)
+        if f is not None:
+            try:
+                data = f.read()
+                if data:
+                    return data
+            except Exception as e:
+                logger.error(f"读取 response.file 失败: {e}")
+        raw = getattr(response, "raw", None)
+        if raw is not None and getattr(raw, "content", None):
+            return raw.content
+        return b''
 
-        if len(content) == 0:
-            raise Exception("Downloaded 0 bytes - empty file or permission denied")
-
-        logger.info(f"Downloaded file: {len(content)} bytes")
-        return content
-
+    # 云空间 /file/ 文件用 file.download；文档素材用 media.download。优先 file，回退 media。
+    content = b''
+    try:
+        content = _read(lark_client.drive.v1.file.download(
+            DownloadFileRequest.builder().file_token(file_token).build()))
+        if content:
+            logger.info(f"file.download 成功: {len(content)} bytes")
     except Exception as e:
-        logger.error(f"Failed to download file from {file_url}: {e}")
-        raise
+        logger.warning(f"file.download 异常，尝试 media.download: {e}")
+
+    if not content:
+        try:
+            content = _read(lark_client.drive.v1.media.download(
+                DownloadMediaRequest.builder().file_token(file_token).build()))
+            if content:
+                logger.info(f"media.download 成功: {len(content)} bytes")
+        except Exception as e:
+            logger.warning(f"media.download 异常: {e}")
+
+    if not content:
+        raise Exception("下载 0 字节 —— 文件为空或应用无该文件访问权")
+    return content
 
 
 def extract_manual_content(manual_files: dict, lark_client: lark.Client) -> str:
