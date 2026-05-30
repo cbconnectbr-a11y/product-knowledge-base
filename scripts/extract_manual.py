@@ -41,12 +41,51 @@ def extract_pdf_content(pdf_bytes: bytes) -> str:
                 text_parts.append(text.strip())
 
         full_text = '\n\n'.join(text_parts)
-
         logger.info(f"PDF extraction: {len(reader.pages)} pages, {len(full_text)} chars")
+
+        # 图片版 PDF（无文字层）→ OCR 回退
+        if len(full_text.strip()) < 50:
+            logger.info("PDF 文字层为空，尝试 OCR…")
+            return ocr_pdf(pdf_bytes)
         return full_text
 
     except Exception as e:
         logger.error(f"Failed to extract PDF content: {e}")
+        return ''
+
+
+def ocr_pdf(pdf_bytes: bytes, max_pages: int = 20, dpi: int = 200, langs: str = "chi_sim+por") -> str:
+    """图片版 PDF 的 OCR：PyMuPDF 渲染每页 → tesseract 识别（中文+葡语）。"""
+    try:
+        import fitz  # PyMuPDF
+        import os
+        import subprocess
+        import tempfile
+
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        texts = []
+        with tempfile.TemporaryDirectory() as td:
+            for i, page in enumerate(doc):
+                if i >= max_pages:
+                    break
+                img_path = os.path.join(td, f"p{i}.png")
+                page.get_pixmap(dpi=dpi).save(img_path)
+                out_base = os.path.join(td, f"p{i}")
+                subprocess.run(
+                    ["tesseract", img_path, out_base, "-l", langs],
+                    capture_output=True, check=False,
+                )
+                txt_path = out_base + ".txt"
+                if os.path.exists(txt_path):
+                    with open(txt_path, encoding="utf-8") as f:
+                        t = f.read().strip()
+                    if t:
+                        texts.append(t)
+        result = "\n\n".join(texts).strip()
+        logger.info(f"OCR 完成：{len(doc)} 页，提取 {len(result)} 字")
+        return result
+    except Exception as e:
+        logger.error(f"OCR 失败：{e}")
         return ''
 
 
