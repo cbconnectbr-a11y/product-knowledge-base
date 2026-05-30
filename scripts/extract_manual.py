@@ -218,15 +218,15 @@ def extract_manual_content(manual_files: dict, lark_client: lark.Client) -> str:
         # 下载文件
         file_bytes = download_feishu_file(file_url, lark_client)
 
-        # 根据文件扩展名选择提取方法
+        # 优先按扩展名；无后缀时按文件 magic bytes 嗅探（PDF: %PDF；docx/zip: PK）
         ext = Path(filename).suffix.lower() if filename else ''
-
-        if ext == '.pdf':
+        head = file_bytes[:4]
+        if ext == '.pdf' or head.startswith(b'%PDF'):
             content = extract_pdf_content(file_bytes)
-        elif ext in ['.docx', '.doc']:
+        elif ext in ['.docx', '.doc'] or head.startswith(b'PK'):
             content = extract_word_content(file_bytes)
         else:
-            logger.warning(f"Unsupported file format: {ext} ({filename})")
+            logger.warning(f"无法识别文件格式: ext={ext!r} head={head!r} ({filename})")
             return ''
 
         return content
