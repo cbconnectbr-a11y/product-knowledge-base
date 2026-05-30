@@ -432,6 +432,44 @@ def write_verification_md(sku: str, product: dict, qa_list: list[dict]) -> Path:
     return out_path
 
 
+def process_sku(sku, client=None, ml_content="", use_manual=True, max_history=50,
+                max_rounds=4, do_verify=True, do_supplement=True):
+    """完整管线处理一个 SKU，返回 (out_path, md_path, 条数)。供单跑与批量复用。"""
+    client = client or get_supabase_client()
+    product = fetch_product(client, sku)
+    if not product:
+        raise ValueError(f"products 表中找不到 SKU={sku}")
+    # 无显式 ml_content 时，尝试读取预抓取的页面文件 data/duoke_generated/ml_{sku}.md
+    if not ml_content:
+        ml_file = OUTPUT_DIR / f"ml_{sku}.md"
+        if ml_file.exists():
+            ml_content = ml_file.read_text()
+    if use_manual:
+        product["_manual_content"] = get_manual_content(product)
+    history = fetch_history(client, sku, max_history)
+    logger.info(f"SKU={sku} | 历史 {len(history)} 条 | 页面={'有' if ml_content else '无'} | 说明书={'有' if product.get('_manual_content') else '无'}")
+
+    qa_list = dedupe(generate_qa(sku, product, history, ml_content))
+    logger.info(f"[生成] {len(qa_list)} 条")
+    if do_supplement:
+        for rnd in range(1, max_rounds + 1):
+            covered = [q.get("q_pt", "") for q in qa_list]
+            more = generate_more(sku, product, history, ml_content, covered)
+            merged = dedupe(qa_list + more)
+            added = len(merged) - len(qa_list)
+            qa_list = merged
+            logger.info(f"[补充第{rnd}轮] 新增 {added} 条 → 共 {len(qa_list)} 条")
+            if added < 5:
+                break
+    if do_verify:
+        qa_list = verify_qa(qa_list, product, history, ml_content)
+    qa_list = translate_qa(qa_list)
+
+    out_path = write_xlsx(sku, product, qa_list)
+    md_path = write_verification_md(sku, product, qa_list)
+    return out_path, md_path, len(qa_list)
+
+
 def main():
     parser = argparse.ArgumentParser(description="生成产品客服双语问答（多客模版）")
     parser.add_argument("--sku", required=True, help="产品 SKU，如 CBC004-452")
@@ -444,45 +482,16 @@ def main():
     args = parser.parse_args()
 
     ml_content = ""
-    if args.ml_file:
-        p = Path(args.ml_file)
-        if p.exists():
-            ml_content = p.read_text()
-            logger.info(f"已加载产品页面：{p}（{len(ml_content)} 字）")
-        else:
-            logger.warning(f"页面文件不存在，跳过：{p}")
+    if args.ml_file and Path(args.ml_file).exists():
+        ml_content = Path(args.ml_file).read_text()
+        logger.info(f"已加载产品页面：{args.ml_file}（{len(ml_content)} 字）")
 
-    client = get_supabase_client()
-    product = fetch_product(client, args.sku)
-    if not product:
-        logger.error(f"products 表中找不到 SKU={args.sku}")
-        sys.exit(1)
-    if args.use_manual:
-        product["_manual_content"] = get_manual_content(product)
-    history = fetch_history(client, args.sku, args.max_history)
-    logger.info(f"SKU={args.sku} | 历史 {len(history)} 条 | 页面={'有' if ml_content else '无'} | 说明书={'有' if product.get('_manual_content') else '无'}")
-
-    qa_list = dedupe(generate_qa(args.sku, product, history, ml_content))
-    logger.info(f"[生成] {len(qa_list)} 条")
-    if not args.no_supplement:
-        # 多轮补充：循环挖未覆盖问题，直到一轮新增很少或达上限，避免条数受单次调用上限/上下文挤占影响
-        for rnd in range(1, args.max_rounds + 1):
-            covered = [q.get("q_pt", "") for q in qa_list]
-            more = generate_more(args.sku, product, history, ml_content, covered)
-            merged = dedupe(qa_list + more)
-            added = len(merged) - len(qa_list)
-            qa_list = merged
-            logger.info(f"[补充第{rnd}轮] 新增 {added} 条 → 共 {len(qa_list)} 条")
-            if added < 5:
-                break
-
-    if not args.no_verify:
-        qa_list = verify_qa(qa_list, product, history, ml_content)
-    qa_list = translate_qa(qa_list)
-
-    out_path = write_xlsx(args.sku, product, qa_list)
-    md_path = write_verification_md(args.sku, product, qa_list)
-    print(f"\n✅ 完成：{out_path}\n   问答条数：{len(qa_list)}\n   待核验清单：{md_path}")
+    out_path, md_path, n = process_sku(
+        args.sku, ml_content=ml_content, use_manual=args.use_manual,
+        max_history=args.max_history, max_rounds=args.max_rounds,
+        do_verify=not args.no_verify, do_supplement=not args.no_supplement,
+    )
+    print(f"\n✅ 完成：{out_path}\n   问答条数：{n}\n   待核验清单：{md_path}")
 
 
 if __name__ == "__main__":
