@@ -117,6 +117,27 @@ def fetch_product(client, sku: str) -> dict | None:
     return r.data[0] if r.data else None
 
 
+def get_manual_content(product: dict) -> str:
+    """尝试提取说明书 PDF/Word 正文（需飞书应用具备 drive 下载权限）。失败返回空串。"""
+    mf = product.get("manual_files")
+    if not mf or not isinstance(mf, dict) or not mf.get("link"):
+        return ""
+    try:
+        import os
+        import lark_oapi as lark
+        from scripts.extract_manual import extract_manual_content
+        lc = lark.Client.builder().app_id(os.environ["FEISHU_APP_ID"]).app_secret(os.environ["FEISHU_APP_SECRET"]).build()
+        content = extract_manual_content(mf, lc) or ""
+        if content.strip():
+            logger.info(f"说明书提取成功：{len(content)} 字")
+        else:
+            logger.warning("说明书提取为空（可能仍无 drive 权限）")
+        return content.strip()
+    except Exception as e:
+        logger.warning(f"说明书提取失败：{e}")
+        return ""
+
+
 def fetch_history(client, sku: str, limit: int) -> list[dict]:
     r = (
         client.table("knowledge_entries")
@@ -153,6 +174,8 @@ def _sources_block(product: dict, history: list[dict], ml_content: str) -> str:
         hist_lines.append(f"[{i+1}] {(h.get('title') or '').strip()} | {(h.get('content') or '').strip()[:700]}")
     hist_block = "\n".join(hist_lines) if hist_lines else "（暂无历史客服记录）"
     ml_block = ml_content.strip() if ml_content.strip() else "（本次未提供产品页面抓取）"
+    manual_full = (product.get("_manual_content") or "").strip()
+    manual_section = f"\n\n=== 源2c 说明书正文（安装/使用步骤权威来源）===\n{manual_full[:4000]}" if manual_full else ""
     return f"""=== 源1 产品页面（买家可见规格以此为权威）===
 {ml_block}
 
@@ -169,7 +192,7 @@ def _sources_block(product: dict, history: list[dict], ml_content: str) -> str:
 {build_basic_info(product)}
 
 === 源3 真实客服历史（{len(history)} 条；忽略其中平台名）===
-{hist_block}"""
+{hist_block}{manual_section}"""
 
 
 GEN_SYSTEM = f"""你是跨境电商客服知识库专家。为一个产品生成「尽可能多、尽可能细」的客服问答（QA），用于多平台 AI 自动回复买家。
@@ -415,6 +438,7 @@ def main():
     parser.add_argument("--ml-file", default="", help="预抓取的产品页面 markdown 文件路径（可选）")
     parser.add_argument("--no-verify", action="store_true", help="跳过核查")
     parser.add_argument("--no-supplement", action="store_true", help="跳过补充一轮")
+    parser.add_argument("--use-manual", action="store_true", help="提取并使用说明书正文（需飞书应用 drive 下载权限）")
     args = parser.parse_args()
 
     ml_content = ""
@@ -431,8 +455,10 @@ def main():
     if not product:
         logger.error(f"products 表中找不到 SKU={args.sku}")
         sys.exit(1)
+    if args.use_manual:
+        product["_manual_content"] = get_manual_content(product)
     history = fetch_history(client, args.sku, args.max_history)
-    logger.info(f"SKU={args.sku} | 历史 {len(history)} 条 | 页面={'有' if ml_content else '无'}")
+    logger.info(f"SKU={args.sku} | 历史 {len(history)} 条 | 页面={'有' if ml_content else '无'} | 说明书={'有' if product.get('_manual_content') else '无'}")
 
     qa_list = generate_qa(args.sku, product, history, ml_content)
     logger.info(f"[生成] {len(qa_list)} 条")
