@@ -43,15 +43,25 @@ def extract_pdf_content(pdf_bytes: bytes) -> str:
         full_text = '\n\n'.join(text_parts)
         logger.info(f"PDF extraction: {len(reader.pages)} pages, {len(full_text)} chars")
 
-        # 图片版 PDF（无文字层）→ OCR 回退
-        if len(full_text.strip()) < 50:
-            logger.info("PDF 文字层为空，尝试 OCR…")
+        # 图片版 PDF（无文字层）或 CID 字形乱码（/gid…，无 ToUnicode）→ OCR 回退
+        if len(full_text.strip()) < 50 or _looks_garbled(full_text):
+            logger.info("PDF 文字层为空或乱码，改用 OCR…")
             return ocr_pdf(pdf_bytes)
         return full_text
 
     except Exception as e:
         logger.error(f"Failed to extract PDF content: {e}")
         return ''
+
+
+def _looks_garbled(text: str) -> bool:
+    """判断 pypdf 提取结果是否为 CID 字形乱码/不可读（无 ToUnicode 的子集字体）。"""
+    if not text:
+        return True
+    if text.count("/gid") > 20 or text.count("(cid:") > 20:
+        return True
+    letters = len(re.findall(r"[A-Za-zÀ-ÿ一-鿿0-9]", text))
+    return letters / max(len(text), 1) < 0.3
 
 
 def ocr_pdf(pdf_bytes: bytes, max_pages: int = 20, dpi: int = 200, langs: str = "chi_sim+por") -> str:
