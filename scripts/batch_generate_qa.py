@@ -94,6 +94,11 @@ def main():
             logger.error(f"[{i}/{len(todo)}] ❌ {sku} 失败：{e}")
             logger.debug(traceback.format_exc())
         save_manifest(manifest)  # 每个SKU后落盘，可随时中断续跑
+        processed = done + fail
+        if processed % 10 == 0:
+            total_done = sum(1 for v in manifest.values() if v.get("status") == "done")
+            logger.info(f"===PROGRESS=== 本次已处理 {processed}/{len(todo)} | 本次成功 {done} 失败 {fail} "
+                        f"| 累计完成 {total_done}/{len(skus)} | 最近 {sku}:{manifest[sku].get('count','-')}条")
 
     total = time.time() - t0
     avg = total / max(done + fail, 1)
