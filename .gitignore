@@ -72,6 +72,7 @@ database/migrations/
 data/duoke/*.xlsx
 data/duoke/archive/*.xlsx
 data/duoke/import_queue.json
+data/duoke_generated/
 .env.backup
 
 # Backups and temporary files
