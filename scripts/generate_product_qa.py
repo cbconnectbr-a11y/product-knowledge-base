@@ -28,25 +28,74 @@ from bot.rag import _get_client
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-TEMPLATE_HEADERS = ["买家问题名称", "买家可能问法", "答案", "答案(中文参考·审核用)"]
+# 导入用列（前3列，葡语）+ 审核用列（中文/来源/标记，导入前可删除）
+TEMPLATE_HEADERS = [
+    "买家问题名称", "买家可能问法", "答案",                # 1-3 导入用（葡语）
+    "问题名称(中文)", "可能问法(中文)", "答案(中文参考)",   # 4-6 审核用
+    "数据来源", "核查标记",                               # 7-8 审核用
+]
 OUTPUT_DIR = Path(__file__).parent.parent / "data" / "duoke_generated"
 
-# 政策类问题（运费/时效/退换货/保修）统一通用模板，避免编造具体天数/金额
+# 政策类问题（运费/时效/退换货/保修）统一通用模板。多平台通用，不出现具体平台名。
 POLICY_TEMPLATE_PT = (
     "Para informações sobre frete, prazo de entrega, garantia, troca ou devolução, "
-    "consulte a página do produto no Mercado Livre ou entre em contato conosco pelo chat. "
-    "Teremos prazer em ajudar!"
+    "consulte a página do produto ou entre em contato conosco. Teremos prazer em ajudar!"
 )
 POLICY_TEMPLATE_CN = (
-    "关于运费、物流时效、保修、退换货等政策，请查看美客多产品页面或通过聊天联系我们，"
-    "我们很乐意为您提供帮助！"
+    "关于运费、物流时效、保修、退换货等政策，请查看产品页面或联系我们，我们很乐意为您提供帮助！"
 )
+
+# feishu_raw_data 中可用于买家答案的“基础信息”白名单（原始字段名 -> 展示标签）。
+# 仅取买家相关字段；成本/采购/供应商/库存/开发员等敏感字段一律不取。
+BASIC_INFO_WHITELIST = {
+    "一级品牌": "品牌",
+    "商品材质": "材质",
+    "商品用途": "用途",
+    "功率": "功率",
+    "单位": "销售单位",
+    "装箱数": "每箱数量",
+    "商品包材": "包装材质",
+    "电器类型": "电器类型",
+    "认证类型": "认证类型",
+    "认证号码": "认证编号",
+    "需要认证": "是否需认证",
+    "商品一级目录": "一级类目",
+    "商品二级目录": "二级类目",
+    "商品三级目录": "三级类目",
+    "申报品名(中文)": "品名(中文)",
+    "申报品名(英文)": "品名(英文)",
+    "主SKU中文名称": "主SKU中文名",
+    "商品备注": "商品备注(颜色/尺寸/零件清单)",
+}
+
+
+def _flatten(v) -> str:
+    """把飞书字段值（可能是 str/list/dict）压成纯文本。"""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, dict):
+        return str(v.get("text") or v.get("name") or "").strip()
+    if isinstance(v, list):
+        return " ".join(_flatten(x) for x in v).strip()
+    return str(v).strip()
+
+
+def build_basic_info(product: dict) -> str:
+    raw = product.get("feishu_raw_data") or {}
+    lines = []
+    for key, label in BASIC_INFO_WHITELIST.items():
+        val = _flatten(raw.get(key))
+        if val and val not in ("0", "0.00", "否", "无", "--"):
+            lines.append(f"- {label}：{val}")
+    return "\n".join(lines) if lines else "（无额外基础信息）"
 
 
 def fetch_product(client, sku: str) -> dict | None:
     r = (
         client.table("products")
-        .select("sku,name_cn,name_en,brand,category,features,description,manual_files")
+        .select("sku,name_cn,name_en,brand,category,features,description,manual_files,feishu_raw_data")
         .eq("sku", sku)
         .limit(1)
         .execute()
@@ -77,58 +126,66 @@ def build_prompt(sku: str, product: dict, history: list[dict], ml_content: str =
         hist_lines.append(f"[{i+1}] 标题: {title}\n    记录: {content}")
     hist_block = "\n".join(hist_lines) if hist_lines else "（暂无历史客服记录）"
 
-    system_prompt = """你是跨境电商（巴西美客多 Mercado Livre）客服知识库专家。
-你的任务：为一个产品生成「尽可能多、尽可能细」的客服智能问答（QA），用于 AI 自动回复巴西买家。
+    basic_info = build_basic_info(product)
 
-【三个数据源，合并去重】
-- 源1 美客多页面（ML）：买家实际看到的 listing 信息（卖点、技术参数表 ficha técnica、描述）。**买家可见规格以此为权威。**
-- 源2 产品信息（products）：内部产品名/卖点/描述/参数/零件清单/说明书。
-- 源3 真实客服历史：买家真正问过的问题与真实葡语问法。
+    system_prompt = """你是跨境电商客服知识库专家。
+你的任务：为一个产品生成「尽可能多、尽可能细」的客服智能问答（QA），用于 AI 自动回复买家。该问答库**应用于多个销售平台**。
+
+【数据源，合并去重】
+- 源1 产品页面（listing）：买家实际看到的页面信息（卖点、技术参数表、描述）。**买家可见规格以此为权威。**
+- 源2a 内部产品信息：产品名/卖点/描述/参数/零件清单/说明书。
+- 源2b 产品基础信息：品牌、材质、用途、类目、认证、包装、单位、装箱数等基础字段——**重点利用它生成丰富的“产品基础信息”类问答**。
+- 源3 真实客服历史：买家真正问过的问题与真实问法（仅供提取“问什么”，其中的平台名一律忽略）。
 
 【生成策略：尽量细、尽量多】
-- 不要把多个事实塞进一条 QA。**每条 QA 只聚焦一个具体点**（如：峰值功率单独一条、持续功率单独一条、重量单独一条、某一种保护单独一条、某一类适用电器单独一条）。
-- 系统化穷举所有维度：每一项技术参数、每一种保护功能、每一类适用/不适用电器、包装内每一个配件、安装每一步、每一个认证、每一个常见故障场景、电压/频率/兼容性、退换货与保修流程等。
-- 把真实历史里的问题也各自独立成条，保留真实问法。
-- 数据里有多少有效信息，就尽量拆成多少条不同的问题（鼓励 30 条以上），但**严禁为凑数编造**。
+- 不要把多个事实塞进一条 QA。**每条 QA 只聚焦一个具体点**。
+- 系统化穷举所有维度：每项技术参数、每种保护、每类适用/不适用对象、包装内每个配件、每个认证、安装每一步、常见故障、电压/频率/兼容性，以及**基础信息**：品牌、材质、用途、产品类别、认证(类型/编号)、包装材质、销售单位、每箱数量、产地用途等——每项可单独成条。
+- 真实历史里的问题各自独立成条，保留真实问法。
+- 有多少有效信息就尽量拆多少条（鼓励 40 条以上），但**严禁为凑数编造**。
 
 【每条 QA 字段】
-- q_pt：葡语问题标题（简洁、自然、地道 PT-BR）
-- variants_pt：6~10 种葡语问法（优先采用历史/listing 里的真实表述，不足由你扩展）
+- q_pt：葡语问题标题（自然、地道 PT-BR）
+- q_cn：q_pt 的中文翻译
+- variants_pt：6~10 种葡语问法（优先取自历史/页面的真实表述）
+- variants_cn：variants_pt 各条的中文翻译（一一对应）
 - a_pt：葡语答案（完整、可直接回复买家；礼貌专业）
-- a_cn：上面葡语答案的中文对照（供内部审核）
+- a_cn：a_pt 的中文对照（供审核）
+- source：该答案信息来源（简短中文），如「页面参数表 / 页面描述 / 内部基础信息 / 内部描述 / 内部卖点 / 客服历史 / 说明书 / 产品名称」，多来源用「+」连接
 
-【铁律 · 严防编造（最重要）】
-1. 只能使用三个数据源中**明确出现**的数字与事实。
-2. **严禁任何推算、换算、估计、四舍五入**（例如：不得由持续功率推算峰值功率、不得由尺寸推算重量、不得由型号猜参数）。每个数字必须能在某个源里逐字找到。
-3. 多个源**冲突**时（如内部写持续850W、ML写1000W）：买家可见规格**以 ML 页面为准**，并在 a_cn 末尾用「（内部数据：…）」注明差异。
-4. 任何源都**没有明确给出**的信息：a_pt 用保守、引导联系客服的措辞，且对应 a_cn **必须以「【待核实】」开头**。
-5. 宁可少答、保守答，也不许编。
+【铁律】
+1. **多平台通用**：a_pt 与 a_cn **严禁出现任何具体平台名称**（如 Mercado Livre、Shopee、美客多、虾皮、Amazon 等）；需要时用中性表述（"na página do produto"、"no anúncio"、"entre em contato conosco"）。
+2. **严防编造**：只能用数据源中**明确出现**的数字与事实；**严禁任何推算/换算/估计**（如由持续功率算峰值、由尺寸算重量）。
+3. 多源**冲突**（如内部850W、页面1000W）：以**页面**为准，a_cn 末尾用「（内部数据：…）」注明。
+4. 任何源都没有明确给出的信息：a_pt 保守表述，a_cn 以「【待核实】」开头。
+5. 宁可少答、保守答，绝不编造。
 
 【输出格式】
-严格输出 JSON 对象：{"qa": [{"q_pt": "...", "variants_pt": ["...", ...], "a_pt": "...", "a_cn": "..."}, ...]}
-不要输出 JSON 以外的任何文字。"""
+严格输出 JSON：{"qa": [{"q_pt":"...","q_cn":"...","variants_pt":["..."],"variants_cn":["..."],"a_pt":"...","a_cn":"...","source":"..."}, ...]}
+只输出 JSON。"""
 
-    ml_block = ml_content.strip() if ml_content.strip() else "（本次未提供 ML 页面）"
+    ml_block = ml_content.strip() if ml_content.strip() else "（本次未提供产品页面抓取）"
 
     user_prompt = f"""产品 SKU：{sku}
 
-=== 源1 美客多页面（买家可见规格以此为权威）===
+=== 源1 产品页面（买家可见规格以此为权威）===
 {ml_block}
 
-=== 源2 内部产品信息 ===
+=== 源2a 内部产品信息 ===
 产品中文名：{product.get('name_cn') or ''}
 英文名：{product.get('name_en') or ''}
-品牌：{product.get('brand') or ''}
 卖点 features：
 {product.get('features') or '（无）'}
 描述 description：
 {product.get('description') or '（无）'}
 说明书：{manual_text or '（无）'}
 
-=== 源3 真实客服历史（{len(history)} 条）===
+=== 源2b 产品基础信息（重点用于基础信息类问答）===
+{basic_info}
+
+=== 源3 真实客服历史（{len(history)} 条；忽略其中平台名）===
 {hist_block}
 
-请严格遵守系统提示的「严防编造」铁律，生成尽可能多、尽可能细的双语 QA，输出 JSON。"""
+请遵守系统提示的铁律，生成尽可能多、尽可能细（含丰富的基础信息类）的多语 QA，输出 JSON。"""
 
     return system_prompt, user_prompt
 
@@ -203,6 +260,8 @@ description：{product.get('description') or '（无）'}
    - 同一事实 **ML 与内部数据冲突**（如内部 850W、ML 1000W）→ a_pt 用 ML 的值，flag = "【⚠️数据不一致 内部:X / ML:Y】"（把 X、Y 换成真实数值）。
    - 全部事实都有据且无冲突 → flag = ""。
 
+3.5 **平台中性**：若 a_pt 或 a_cn 出现任何具体平台名（Mercado Livre、Shopee、美客多、虾皮、Amazon 等），改写为中性表述（"na página do produto" / "产品页面"），此条也要返回。
+
 3. a_cn 始终是修正后 a_pt 的中文对照（政策类用上面的中文模板）。不要加 [SKU] 前缀。
 
 **只返回需要改动或标记的条目**（即 flag 非空、或答案需更正的）；无需改动的条目不要返回，节省篇幅。
@@ -255,16 +314,18 @@ def write_xlsx(sku: str, product: dict, qa_list: list[dict]) -> Path:
     ws.title = "Sheet1"
     ws.append(TEMPLATE_HEADERS)
     for qa in qa_list:
-        variants = qa.get("variants_pt") or []
-        variants_text = "\n".join(v.strip() for v in variants if v.strip())
+        variants_pt = "\n".join(v.strip() for v in (qa.get("variants_pt") or []) if v.strip())
+        variants_cn = "\n".join(v.strip() for v in (qa.get("variants_cn") or []) if v.strip())
         a_cn = qa.get("a_cn", "").strip()
-        flag = qa.get("flag", "").strip()
-        a_cn_marked = f"[{sku}] " + (f"{flag} " if flag else "") + a_cn
         ws.append([
-            qa.get("q_pt", "").strip(),
-            variants_text,
-            qa.get("a_pt", "").strip(),
-            a_cn_marked,
+            qa.get("q_pt", "").strip(),                 # 1 买家问题名称(PT)
+            variants_pt,                                 # 2 买家可能问法(PT)
+            qa.get("a_pt", "").strip(),                  # 3 答案(PT)
+            qa.get("q_cn", "").strip(),                  # 4 问题名称(中文)
+            variants_cn,                                 # 5 可能问法(中文)
+            f"[{sku}] {a_cn}",                           # 6 答案(中文参考)
+            qa.get("source", "").strip(),                # 7 数据来源
+            qa.get("flag", "").strip(),                  # 8 核查标记
         ])
     name = sanitize_filename(product.get("name_cn") or "")
     out_path = OUTPUT_DIR / f"{sku}_{name}.xlsx"
