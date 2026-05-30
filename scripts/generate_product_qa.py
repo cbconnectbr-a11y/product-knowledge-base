@@ -150,7 +150,7 @@ def _sources_block(product: dict, history: list[dict], ml_content: str) -> str:
     manual_text = manual.get("text", "") if isinstance(manual, dict) else ""
     hist_lines = []
     for i, h in enumerate(history):
-        hist_lines.append(f"[{i+1}] {(h.get('title') or '').strip()} | {(h.get('content') or '').strip()[:350]}")
+        hist_lines.append(f"[{i+1}] {(h.get('title') or '').strip()} | {(h.get('content') or '').strip()[:700]}")
     hist_block = "\n".join(hist_lines) if hist_lines else "（暂无历史客服记录）"
     ml_block = ml_content.strip() if ml_content.strip() else "（本次未提供产品页面抓取）"
     return f"""=== 源1 产品页面（买家可见规格以此为权威）===
@@ -178,7 +178,8 @@ GEN_SYSTEM = f"""你是跨境电商客服知识库专家。为一个产品生成
 
 【生成策略：尽量多、尽量细】
 - 每条 QA 只聚焦一个具体点，**不要**把多个事实塞进一条。
-- 系统化穷举所有维度：每项技术参数、每种保护、每类适用/不适用对象、包装内每个配件、每个认证、安装每一步、常见故障、电压/频率/兼容性；以及**基础信息**：品牌、材质、用途、产品类别、认证(类型/编号)、包装材质、销售单位、每箱数量等——每项单独成条。
+- 系统化穷举所有维度：每项技术参数、每种保护、每类适用/不适用对象、包装内每个配件、每个认证、常见故障、电压/频率/兼容性；以及**基础信息**：品牌、材质、用途、产品类别、认证(类型/编号)、包装材质、销售单位、每箱数量等——每项单独成条。
+- **【重点】使用与安装类（买家高频）**：必须充分覆盖——如何使用（como usar / como funciona）、如何安装/组装（como instalar / como montar，尽量拆成分步骤）、安装/使用中的注意事项与禁忌（cuidados, o que evitar, precauções）、首次使用准备、连接方式与极性、维护保养与清洁、收纳。优先取材于说明书要点、描述/卖点、客服历史里的真实问答。**步骤类信息若数据里没有，仍要生成该问题，但答案保守说明并标待核实，方便人工照说明书补。**
 - 真实历史里的问题各自独立成条，保留真实问法。
 - **至少生成 40 条**，有多少有效信息就尽量拆多少条，但**严禁为凑数编造**。
 
