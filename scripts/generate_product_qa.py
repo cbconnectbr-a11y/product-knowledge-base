@@ -148,8 +148,20 @@ def generate_qa(sku: str, product: dict, history: list[dict], ml_content: str = 
         response_format={"type": "json_object"},
     )
     raw = resp.choices[0].message.content.strip()
-    data = json.loads(raw)
-    return data.get("qa", [])
+    try:
+        return json.loads(raw).get("qa", [])
+    except json.JSONDecodeError:
+        # 输出被截断时，截到最后一个完整对象并补全闭合
+        cut = raw.rfind("}")
+        if cut != -1:
+            salvaged = raw[: cut + 1] + "]}"
+            try:
+                qa = json.loads(salvaged).get("qa", [])
+                logger.warning(f"生成 JSON 被截断，已抢救出 {len(qa)} 条")
+                return qa
+            except json.JSONDecodeError:
+                pass
+        raise
 
 
 def verify_qa(qa_list: list[dict], sku: str, product: dict, history: list[dict], ml_content: str) -> list[dict]:
@@ -193,7 +205,8 @@ description：{product.get('description') or '（无）'}
 
 3. a_cn 始终是修正后 a_pt 的中文对照（政策类用上面的中文模板）。不要加 [SKU] 前缀。
 
-严格输出 JSON：{{"items": [{{"i":0,"flag":"...","a_pt":"...","a_cn":"..."}}, ...]}}，items 数量与顺序必须与输入完全一致。只输出 JSON。"""
+**只返回需要改动或标记的条目**（即 flag 非空、或答案需更正的）；无需改动的条目不要返回，节省篇幅。
+严格输出 JSON：{{"items": [{{"i":原序号,"flag":"...","a_pt":"...","a_cn":"..."}}, ...]}}。只输出 JSON。"""
 
     user_prompt = f"""{sources}
 
@@ -201,6 +214,8 @@ description：{product.get('description') or '（无）'}
 {json.dumps(qa_for_check, ensure_ascii=False)}"""
 
     logger.info(f"核查 {len(qa_list)} 条…")
+    for qa in qa_list:
+        qa.setdefault("flag", "")
     resp = client.chat.completions.create(
         model=model,
         messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
@@ -208,7 +223,11 @@ description：{product.get('description') or '（无）'}
         max_tokens=8000,
         response_format={"type": "json_object"},
     )
-    items = json.loads(resp.choices[0].message.content.strip()).get("items", [])
+    try:
+        items = json.loads(resp.choices[0].message.content.strip()).get("items", [])
+    except json.JSONDecodeError as e:
+        logger.warning(f"核查结果 JSON 解析失败，跳过核查：{e}")
+        return qa_list
     by_i = {it.get("i"): it for it in items if isinstance(it, dict)}
     for i, qa in enumerate(qa_list):
         it = by_i.get(i)
@@ -253,6 +272,55 @@ def write_xlsx(sku: str, product: dict, qa_list: list[dict]) -> Path:
     return out_path
 
 
+def write_verification_md(sku: str, product: dict, qa_list: list[dict]) -> Path:
+    """把需要人工核验的条目写入 markdown 清单，便于审核。"""
+    from datetime import datetime
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    conflicts = [q for q in qa_list if "数据不一致" in (q.get("flag") or "")]
+    todo = [q for q in qa_list if "待核实" in (q.get("flag") or "")]
+    policy = [q for q in qa_list if "通用模板" in (q.get("flag") or "")]
+    flagged = len(conflicts) + len(todo) + len(policy)
+
+    lines = [
+        f"# {sku} 待核验清单",
+        "",
+        f"- 产品：{product.get('name_cn') or ''}",
+        f"- 生成时间：{datetime.now():%Y-%m-%d %H:%M}",
+        f"- 问答总数：{len(qa_list)} | 需核验：{flagged}（数据不一致 {len(conflicts)} · 待核实 {len(todo)} · 政策模板 {len(policy)}）",
+        "",
+    ]
+
+    def block(title, items):
+        lines.append(f"## {title}（{len(items)} 条）")
+        lines.append("")
+        if not items:
+            lines.append("（无）")
+            lines.append("")
+            return
+        for n, q in enumerate(items, 1):
+            lines.append(f"{n}. **{q.get('q_pt','')}**")
+            lines.append(f"   - 标记：{q.get('flag','')}")
+            lines.append(f"   - 答案(PT)：{q.get('a_pt','')}")
+            lines.append(f"   - 中文：{q.get('a_cn','')}")
+            lines.append("")
+
+    block("⚠️ 数据不一致（链接 vs 内部，需确认以哪个为准）", conflicts)
+    block("🔶 待核实（缺乏来源依据，需人工补充或确认）", todo)
+    block("📋 政策类（通用模板，需补充本店具体政策）", policy)
+
+    lines += [
+        "## ❗ 重点人工复核提示",
+        "",
+        "- **计数 / 数量类**（USB 口数、配件件数、保护种类数等）：AI 核查对这类不可靠，请对照产品原始信息**逐条确认**。",
+        "- 表格中文参考列已带 `[SKU]` 与上述标记，可在 Excel 中按标记筛选审核。",
+        "",
+    ]
+    out_path = OUTPUT_DIR / f"{sku}_待核验.md"
+    out_path.write_text("\n".join(lines))
+    return out_path
+
+
 def main():
     parser = argparse.ArgumentParser(description="生成产品客服双语问答（多客模版）")
     parser.add_argument("--sku", required=True, help="产品 SKU，如 CBC004-452")
@@ -286,8 +354,10 @@ def main():
         qa_list = verify_qa(qa_list, args.sku, product, history, ml_content)
 
     out_path = write_xlsx(args.sku, product, qa_list)
+    md_path = write_verification_md(args.sku, product, qa_list)
     logger.info(f"已写出：{out_path}")
-    print(f"\n✅ 完成：{out_path}\n   问答条数：{len(qa_list)}")
+    logger.info(f"待核验清单：{md_path}")
+    print(f"\n✅ 完成：{out_path}\n   问答条数：{len(qa_list)}\n   待核验清单：{md_path}")
 
 
 if __name__ == "__main__":
