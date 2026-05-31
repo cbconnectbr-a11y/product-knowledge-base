@@ -32,18 +32,15 @@ from scripts.utils import get_supabase_client
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-SKU_LIST = OUTPUT_DIR / "sku_list.json"
-MANIFEST = OUTPUT_DIR / "batch_manifest.json"
 
-
-def load_manifest() -> dict:
-    if MANIFEST.exists():
-        return json.loads(MANIFEST.read_text())
+def load_manifest(path: Path) -> dict:
+    if path.exists():
+        return json.loads(path.read_text())
     return {}
 
 
-def save_manifest(m: dict):
-    MANIFEST.write_text(json.dumps(m, ensure_ascii=False, indent=1))
+def save_manifest(path: Path, m: dict):
+    path.write_text(json.dumps(m, ensure_ascii=False, indent=1))
 
 
 def main():
@@ -54,12 +51,19 @@ def main():
     ap.add_argument("--max-history", type=int, default=50)
     ap.add_argument("--no-manual", action="store_true", help="不提取说明书（更快）")
     ap.add_argument("--redo", action="store_true", help="忽略manifest，全部重跑")
+    ap.add_argument("--out-dir", default=str(OUTPUT_DIR), help="输出目录（默认 data/duoke_generated）")
+    ap.add_argument("--sku-list", default="", help="SKU清单json路径（默认 <out-dir>/sku_list.json）")
     args = ap.parse_args()
 
-    if not SKU_LIST.exists():
-        logger.error(f"找不到 SKU 清单：{SKU_LIST}")
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sku_list_path = Path(args.sku_list) if args.sku_list else out_dir / "sku_list.json"
+    manifest_path = out_dir / "batch_manifest.json"
+
+    if not sku_list_path.exists():
+        logger.error(f"找不到 SKU 清单：{sku_list_path}")
         sys.exit(1)
-    sku_items = json.loads(SKU_LIST.read_text())
+    sku_items = json.loads(sku_list_path.read_text())
     skus = [it["sku"] for it in sku_items if it.get("sku")]
 
     if args.skus:
@@ -68,9 +72,9 @@ def main():
     if args.limit:
         skus = skus[: args.limit]
 
-    manifest = {} if args.redo else load_manifest()
+    manifest = {} if args.redo else load_manifest(manifest_path)
     todo = [s for s in skus if manifest.get(s, {}).get("status") != "done"]
-    logger.info(f"待处理 {len(todo)}/{len(skus)} 个 SKU（已完成 {len(skus)-len(todo)}，断点续跑）")
+    logger.info(f"输出目录 {out_dir} | 待处理 {len(todo)}/{len(skus)} 个 SKU（已完成 {len(skus)-len(todo)}，断点续跑）")
 
     client = get_supabase_client()
     done = fail = 0
@@ -80,7 +84,7 @@ def main():
         try:
             out_path, md_path, n = process_sku(
                 sku, client=client, use_manual=not args.no_manual,
-                max_history=args.max_history, max_rounds=args.max_rounds,
+                max_history=args.max_history, max_rounds=args.max_rounds, out_dir=out_dir,
             )
             dt = time.time() - start
             manifest[sku] = {"status": "done", "count": n, "file": out_path.name,
@@ -93,7 +97,7 @@ def main():
             fail += 1
             logger.error(f"[{i}/{len(todo)}] ❌ {sku} 失败：{e}")
             logger.debug(traceback.format_exc())
-        save_manifest(manifest)  # 每个SKU后落盘，可随时中断续跑
+        save_manifest(manifest_path, manifest)  # 每个SKU后落盘，可随时中断续跑
         processed = done + fail
         if processed % 10 == 0:
             total_done = sum(1 for v in manifest.values() if v.get("status") == "done")
@@ -106,7 +110,7 @@ def main():
     failed = [s for s, v in manifest.items() if v.get("status") == "failed"]
     if failed:
         logger.warning(f"失败清单（{len(failed)}）：{', '.join(failed)}")
-    print(f"\n批量结束：成功 {done}、失败 {fail}。输出目录：{OUTPUT_DIR}")
+    print(f"\n批量结束：成功 {done}、失败 {fail}。输出目录：{out_dir}")
 
 
 if __name__ == "__main__":

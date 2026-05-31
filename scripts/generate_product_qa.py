@@ -363,8 +363,8 @@ def sanitize_filename(text: str, maxlen: int = 30) -> str:
     return text[:maxlen]
 
 
-def write_xlsx(sku: str, product: dict, qa_list: list[dict]) -> Path:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def write_xlsx(sku: str, product: dict, qa_list: list[dict], out_dir: Path = OUTPUT_DIR) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
@@ -384,15 +384,15 @@ def write_xlsx(sku: str, product: dict, qa_list: list[dict]) -> Path:
             (qa.get("flag") or "").strip(),
         ])
     name = sanitize_filename(product.get("name_cn") or "")
-    out_path = OUTPUT_DIR / f"{sku}_{name}.xlsx"
+    out_path = out_dir / f"{sku}_{name}.xlsx"
     wb.save(out_path)
     return out_path
 
 
-def write_verification_md(sku: str, product: dict, qa_list: list[dict]) -> Path:
+def write_verification_md(sku: str, product: dict, qa_list: list[dict], out_dir: Path = OUTPUT_DIR) -> Path:
     from datetime import datetime
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     conflicts = [q for q in qa_list if "数据不一致" in (q.get("flag") or "")]
     todo = [q for q in qa_list if "待核实" in (q.get("flag") or "")]
     policy = [q for q in qa_list if "通用模板" in (q.get("flag") or "")]
@@ -427,21 +427,21 @@ def write_verification_md(sku: str, product: dict, qa_list: list[dict]) -> Path:
         "- xlsx 第 8 列「核查标记」可在 Excel 中筛选审核；前 3 列为导入用，后 5 列导入前可删除。",
         "",
     ]
-    out_path = OUTPUT_DIR / f"{sku}_待核验.md"
+    out_path = out_dir / f"{sku}_待核验.md"
     out_path.write_text("\n".join(lines))
     return out_path
 
 
 def process_sku(sku, client=None, ml_content="", use_manual=True, max_history=50,
-                max_rounds=4, do_verify=True, do_supplement=True):
+                max_rounds=4, do_verify=True, do_supplement=True, out_dir: Path = OUTPUT_DIR):
     """完整管线处理一个 SKU，返回 (out_path, md_path, 条数)。供单跑与批量复用。"""
     client = client or get_supabase_client()
     product = fetch_product(client, sku)
     if not product:
         raise ValueError(f"products 表中找不到 SKU={sku}")
-    # 无显式 ml_content 时，尝试读取预抓取的页面文件 data/duoke_generated/ml_{sku}.md
+    # 无显式 ml_content 时，尝试读取预抓取的页面文件 {out_dir}/ml_{sku}.md
     if not ml_content:
-        ml_file = OUTPUT_DIR / f"ml_{sku}.md"
+        ml_file = out_dir / f"ml_{sku}.md"
         if ml_file.exists():
             ml_content = ml_file.read_text()
     if use_manual:
@@ -465,8 +465,8 @@ def process_sku(sku, client=None, ml_content="", use_manual=True, max_history=50
         qa_list = verify_qa(qa_list, product, history, ml_content)
     qa_list = translate_qa(qa_list)
 
-    out_path = write_xlsx(sku, product, qa_list)
-    md_path = write_verification_md(sku, product, qa_list)
+    out_path = write_xlsx(sku, product, qa_list, out_dir=out_dir)
+    md_path = write_verification_md(sku, product, qa_list, out_dir=out_dir)
     return out_path, md_path, len(qa_list)
 
 
