@@ -23,11 +23,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from openpyxl import Workbook
 from scripts.utils import get_supabase_client
 
+import argparse
+
 ROOT = Path(__file__).parent.parent
-OUTPUT_DIR = ROOT / "data" / "duoke_generated"
-SKU_LIST = OUTPUT_DIR / "sku_list.json"
-MANIFEST = OUTPUT_DIR / "batch_manifest.json"
-LOGS = ["/tmp/batch_qa_full.log", "/tmp/batch_qa.log"]
+DEFAULT_LOGS = "/tmp/batch_qa_full.log,/tmp/batch_qa.log,/tmp/batch2_qa.log,/tmp/batch2_finish.log"
 
 
 def chunks(lst, n):
@@ -36,6 +35,17 @@ def chunks(lst, n):
 
 
 def main():
+    ap = argparse.ArgumentParser(description="说明书使用汇总")
+    ap.add_argument("--out-dir", default=str(ROOT / "data" / "duoke_generated"))
+    ap.add_argument("--logs", default=DEFAULT_LOGS, help="逗号分隔的日志路径")
+    ap.add_argument("--name", default="", help="汇总名称(用于md文件名)")
+    args = ap.parse_args()
+    OUTPUT_DIR = Path(args.out_dir)
+    SKU_LIST = OUTPUT_DIR / "sku_list.json"
+    MANIFEST = OUTPUT_DIR / "batch_manifest.json"
+    LOGS = [x for x in args.logs.split(",") if x]
+    name = args.name or OUTPUT_DIR.name
+
     sku_items = json.loads(SKU_LIST.read_text())
     skus = [it["sku"] for it in sku_items if it.get("sku")]
     store_of = {it["sku"]: it.get("store", "") for it in sku_items}
@@ -102,13 +112,13 @@ def main():
 
     # md 汇总
     lines = [
-        "# 产品问答 — 说明书使用汇总", "",
+        f"# 产品问答 — 说明书使用汇总（{name}）", "",
         f"- 总 SKU：{len(rows)}",
         f"- ✅ 用到说明书：{len(used_rows)}",
         f"- ⚠️ 有说明书文件但未提取成功：{len(fail_rows)}（下载/OCR 失败，可排查后重跑）",
         f"- ❌ 无说明书文件：{len(none_rows)}（**需补充说明书**）",
         f"- ⏳ 未处理(批量还没跑到)：{len(pending_rows)}",
-        "", f"明细表：`data/duoke_generated/说明书使用汇总.xlsx`", "",
+        "", f"明细表：`{xlsx_path}`", "",
         "## ❌ 无说明书 —— 建议补充说明书的 SKU", "",
         "| SKU | 店铺 | 产品名 |", "|---|---|---|",
     ]
@@ -121,7 +131,7 @@ def main():
             lines.append(f"| {r['sku']} | {r['store']} | {r['name']} | {r['manual_name']} |")
     lines += ["", "---", "*补充说明书后，对相应 SKU 重跑：*",
               "`python3.13 scripts/generate_product_qa.py --sku <SKU> --use-manual`"]
-    md_path = ROOT / "docs" / "产品问答-说明书使用汇总.md"
+    md_path = ROOT / "docs" / f"产品问答-说明书使用汇总-{name}.md"
     md_path.write_text("\n".join(lines))
 
     print(f"✅ 汇总完成：\n  明细 xlsx：{xlsx_path}\n  汇总 md：{md_path}")
